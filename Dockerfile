@@ -94,7 +94,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 # Create a non-root user.
 RUN useradd -m -u 1000 wrapper && \
     mkdir -p /data/data/com.apple.android.music/files && \
-    chown -R wrapper:wrapper /data
+    chown -R 1000:0 /data && \
+    chmod -R g=u /data
 
 # Copy the built daemon and the staged rootfs to the real root.
 # This allows the Android linker to find everything without chroot.
