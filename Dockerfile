@@ -21,9 +21,7 @@ ARG APK_URL="https://github.com/5hojib/WealthWise/releases/download/v1/apple-mus
 SHELL ["/bin/bash", "-c"]
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN --mount=type=cache,target=/var/lib/apt,sharing=locked \
-    --mount=type=cache,target=/var/cache/apt,sharing=locked \
-    apt-get update && \
+RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         build-essential \
         ca-certificates \
@@ -117,4 +115,4 @@ USER wrapper
 WORKDIR /home/wrapper
 
 # Start the daemon via the Android linker.
-ENTRYPOINT ["/system/bin/linker64", "/usr/local/bin/wrapper-daemon"]
+ENTRYPOINT ["/usr/local/bin/wrapper-daemon"]
