@@ -267,13 +267,7 @@ private:
             setenv("WRAPPER_PORT", std::to_string(worker_port_).c_str(), 1);
             setenv("WRAPPER_MODE", "worker", 1);
 
-            // If we are running inside the container with our custom layout,
-            // we should exec via the linker.
-            if (access("/system/bin/linker64", F_OK) == 0) {
-                execl("/system/bin/linker64", "/system/bin/linker64", argv0_.c_str(), static_cast<char*>(nullptr));
-            } else {
-                execl(argv0_.c_str(), argv0_.c_str(), static_cast<char*>(nullptr));
-            }
+            execl(argv0_.c_str(), argv0_.c_str(), static_cast<char*>(nullptr));
             std::fprintf(stderr, "supervisor: exec worker failed: %s\n", argv0_.c_str());
             _exit(127);
         }
