@@ -7,6 +7,7 @@
 #include <exception>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 
@@ -398,10 +399,21 @@ private:
     static bool should_restart_after_decrypt(const WorkerHttpResponse& r) {
         if (!r.transport_ok) return true;
         if (r.status != 502 && r.status != 500 && r.status != 504) return false;
-        if (r.body.find("decrypt_failed") != std::string::npos) return true;
-        if (r.body.find("FairPlay") != std::string::npos) return true;
-        if (r.body.find("CKC") != std::string::npos) return true;
-        if (r.body.find("KDCanProcess") != std::string::npos) return true;
+
+        std::string_view sv(r.body);
+        size_t len = sv.length();
+        for (size_t i = 0; i < len; ++i) {
+            char c = sv[i];
+            if (c == 'd') {
+                if (i + 13 < len && sv.substr(i, 14) == "decrypt_failed") return true;
+            } else if (c == 'F') {
+                if (i + 7 < len && sv.substr(i, 8) == "FairPlay") return true;
+            } else if (c == 'C') {
+                if (i + 2 < len && sv.substr(i, 3) == "CKC") return true;
+            } else if (c == 'K') {
+                if (i + 11 < len && sv.substr(i, 12) == "KDCanProcess") return true;
+            }
+        }
         return false;
     }
 
