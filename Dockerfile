@@ -16,7 +16,7 @@ FROM --platform=linux/amd64 debian:13.2 AS build
 ARG TARGET_ARCH=x86_64
 ARG CMAKE_BUILD_TYPE=Release
 ARG NDK_VERSION=23
-ARG APK_URL="https://github.com/5hojib/WealthWise/releases/download/v1/apple_music.apkm"
+ARG APK_URL="https://github.com/5hojib/WealthWise/releases/download/v1/apple-music.apkm"
 
 SHELL ["/bin/bash", "-c"]
 ENV DEBIAN_FRONTEND=noninteractive
