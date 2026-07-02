@@ -1,9 +1,11 @@
 #include "apple/decrypt.hpp"
 
+#include <atomic>
 #include <cstdio>
 #include <exception>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 
@@ -157,22 +159,60 @@ DecryptResult decrypt_samples(const Loader& loader,
             (void)sv_ctx;
         }
 
-        attempt.plaintexts.reserve(chunks.size());
         std::fprintf(stderr, "decrypt: fp_sample_decrypt samples=%zu\n", chunks.size());
-        for (auto& chunk : chunks) {
-            if (chunk.empty()) {
-                *error = "empty sample";
-                attempt.plaintexts.clear();
-                return attempt;
+
+        attempt.plaintexts.resize(chunks.size());
+
+        unsigned int hw_concurrency = std::thread::hardware_concurrency();
+        unsigned int num_threads = (hw_concurrency == 0) ? 4 : hw_concurrency;
+        if (num_threads > chunks.size()) {
+            num_threads = chunks.size();
+        }
+
+        std::vector<std::thread> threads;
+        std::atomic<bool> error_occurred{false};
+        std::mutex error_mutex;
+
+        for (unsigned int t = 0; t < num_threads; ++t) {
+            threads.emplace_back([&, t]() {
+                for (size_t i = t; i < chunks.size(); i += num_threads) {
+                    if (error_occurred.load(std::memory_order_relaxed)) {
+                        break;
+                    }
+
+                    auto& chunk = chunks[i];
+                    if (chunk.empty()) {
+                        std::lock_guard<std::mutex> lock(error_mutex);
+                        if (!error_occurred.exchange(true)) {
+                            *error = "empty sample";
+                        }
+                        break;
+                    }
+
+                    const long status = s.fp_sample_decrypt(kd, 5u, chunk.data(), chunk.data(), chunk.size());
+                    if (status < 0) {
+                        std::lock_guard<std::mutex> lock(error_mutex);
+                        if (!error_occurred.exchange(true)) {
+                            *error = "FairPlay sample decrypt failed status=" + std::to_string(status);
+                            std::fprintf(stderr, "decrypt: fp_sample_decrypt failed status=%ld\n", status);
+                        }
+                        break;
+                    }
+
+                    attempt.plaintexts[i] = std::move(chunk);
+                }
+            });
+        }
+
+        for (auto& thread : threads) {
+            if (thread.joinable()) {
+                thread.join();
             }
-            const long status = s.fp_sample_decrypt(kd, 5u, chunk.data(), chunk.data(), chunk.size());
-            if (status < 0) {
-                *error = "FairPlay sample decrypt failed status=" + std::to_string(status);
-                std::fprintf(stderr, "decrypt: fp_sample_decrypt failed status=%ld\n", status);
-                attempt.plaintexts.clear();
-                return attempt;
-            }
-            attempt.plaintexts.push_back(std::move(chunk));
+        }
+
+        if (error_occurred.load()) {
+            attempt.plaintexts.clear();
+            return attempt;
         }
 
         attempt.ok = true;
