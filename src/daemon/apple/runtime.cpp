@@ -58,7 +58,7 @@ void end_lease_cb(const int& code) {
     std::fprintf(stderr, "runtime: playback lease ended (code=%d)\n", code);
 }
 
-void pb_err_cb(void* /*unused*/) {
+void pb_err_cb([[maybe_unused]] void* ptr) {
     std::fprintf(stderr, "runtime: playback StoreErrorCondition callback\n");
 }
 
