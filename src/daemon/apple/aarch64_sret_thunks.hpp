@@ -7,7 +7,7 @@
 // (sret) and argument registers. If "blr %[callee]" shared a register with the sret
 // slot, Clang could place the target in x8, then `mov x8, %[sret]` would corrupt it
 // and we would branch into the return buffer (SIGSEGV at a small address).
-// Fix: load the target into x9 first, then set x8/x0–x7, then `blr x9`.
+// Solution: load the target into x9 first, then set x8/x0-x7, then `blr x9`.
 //
 // On x86_64, call through the raw function pointer unchanged.
 
