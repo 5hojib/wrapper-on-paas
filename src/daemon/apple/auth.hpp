@@ -1,4 +1,4 @@
-// Account / login state for wrapper-v2.
+// Account / login state for wrapper.
 //
 // Apple-ID password sign-in flow driven through Apple's AuthenticateFlow. The
 // flow is callback-based (Apple calls our credentialHandler inline

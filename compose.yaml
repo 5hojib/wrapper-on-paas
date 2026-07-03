@@ -8,8 +8,8 @@ services:
         BUILD_PLATFORM: ${BUILD_PLATFORM:-linux/amd64}
         RUNTIME_PLATFORM: ${RUNTIME_PLATFORM:-linux/amd64}
         APK_URL: ${APK_URL:-}
-    image: wrapper-v2:latest
-    container_name: wrapper-v2
+    image: wrapper:latest
+    container_name: wrapper
     restart: unless-stopped
     # Privileged operations are no longer required.
     ports:

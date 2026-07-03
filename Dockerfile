@@ -1,4 +1,4 @@
-# wrapper-v2 image.
+# wrapper image.
 #
 # This Dockerfile is optimized for deployment on Render and other non-root
 # environments. It can automatically download Apple Music libraries if APK_URL

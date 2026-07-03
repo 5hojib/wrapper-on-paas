@@ -27,7 +27,7 @@ This matches how AOSP system images are laid out.
 ## License
 
 These binaries are Apache-2.0 (AOSP). Redistribution is permitted; see
-`LICENSE` at the repo root for the wrapper-v2 project license.
+`LICENSE` at the repo root for the wrapper project license.
 
 ## Provenance
 

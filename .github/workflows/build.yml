@@ -83,7 +83,7 @@ jobs:
             --build-arg BUILD_PLATFORM=${{ matrix.docker_platform }} \
             --build-arg RUNTIME_PLATFORM=${{ matrix.docker_platform }} \
             --build-arg TARGET_ARCH=${{ matrix.arch }} \
-            -t wrapper-v2:${{ github.sha }} \
+            -t wrapper:${{ github.sha }} \
             .
 
       - name: Smoke test (/health)
@@ -99,7 +99,7 @@ jobs:
             --cap-add SYS_ADMIN --cap-add SYS_CHROOT --cap-add SYS_PTRACE \
             --security-opt apparmor=unconfined \
             -p 8080:80 \
-            wrapper-v2:${{ github.sha }}
+            wrapper:${{ github.sha }}
           ok=0
           for i in $(seq 1 40); do
             if curl -sf http://127.0.0.1:8080/health >/dev/null; then

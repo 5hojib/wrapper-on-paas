@@ -51,7 +51,7 @@ void access_log(const char* method, const httplib::Request& req) {
 void schedule_process_restart(std::string reason) {
     std::thread([reason = std::move(reason)] {
         std::this_thread::sleep_for(750ms);
-        std::fprintf(stderr, "wrapper-v2: hard restart requested: %s\n", reason.c_str());
+        std::fprintf(stderr, "wrapper: hard restart requested: %s\n", reason.c_str());
         std::fflush(stderr);
         std::_Exit(kRestartExitCode);
     }).detach();
@@ -62,7 +62,7 @@ std::shared_ptr<std::atomic_bool> start_decrypt_watchdog() {
     std::thread([done] {
         std::this_thread::sleep_for(kDecryptWatchdogTimeout);
         if (done->load(std::memory_order_acquire)) return;
-        std::fprintf(stderr, "wrapper-v2: hard restart requested: POST /decrypt watchdog timeout\n");
+        std::fprintf(stderr, "wrapper: hard restart requested: POST /decrypt watchdog timeout\n");
         std::fflush(stderr);
         std::_Exit(kRestartExitCode);
     }).detach();

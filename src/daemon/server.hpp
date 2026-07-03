@@ -1,7 +1,7 @@
 // HTTP server wiring.
 //
 // The Server class owns an httplib::Server and mounts the routes
-// wrapper-v2 exposes. References to the runtime modules are
+// wrapper exposes. References to the runtime modules are
 // captured by reference - the Server does not own them.
 
 #pragma once

@@ -1,5 +1,5 @@
 /*
- * wrapper-v2 chroot launcher.
+ * wrapper chroot launcher.
  *
  * Sets up a minimal chroot inside ./rootfs/ that exposes the Android dynamic
  * linker (linker64) and Apple Music's native libs to a daemon binary at

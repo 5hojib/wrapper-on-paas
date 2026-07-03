@@ -1,4 +1,4 @@
-// wrapper-v2 daemon entry point.
+// wrapper daemon entry point.
 //
 // The daemon starts in LoggedOut state, expects credentials via HTTP,
 // and drives Apple's AuthenticateFlow under the hood:
@@ -79,7 +79,7 @@ void on_crash(int sig, siginfo_t* info, void* ctx) {
 #endif
     char buf[128];
     int n = snprintf(buf, sizeof(buf),
-                     "wrapper-v2: fatal signal %d fault_addr=%p rip=%p\n",
+                     "wrapper: fatal signal %d fault_addr=%p rip=%p\n",
                      sig, fault_addr, rip);
     (void)write(STDERR_FILENO, buf, n > 0 ? n : 0);
     _exit(128 + sig);
@@ -88,7 +88,7 @@ void on_crash(int sig, siginfo_t* info, void* ctx) {
 void on_signal(int sig) {
     auto* s = g_server.load();
     if (s != nullptr) {
-        std::fprintf(stderr, "wrapper-v2: caught signal %d, stopping server\n", sig);
+        std::fprintf(stderr, "wrapper: caught signal %d, stopping server\n", sig);
         s->stop();
     }
 }
@@ -122,7 +122,7 @@ bool consume_argv(int argc, char** argv, ProgramMode* mode) {
         *mode = ProgramMode::Supervisor;
     } else {
         std::fprintf(stderr,
-                     "wrapper-v2: invalid WRAPPER_MODE='%s' "
+                     "wrapper: invalid WRAPPER_MODE='%s' "
                      "(expected 'supervisor' or 'worker')\n",
                      mode_env.c_str());
         std::exit(2);
@@ -132,7 +132,7 @@ bool consume_argv(int argc, char** argv, ProgramMode* mode) {
         std::string_view x = argv[i];
         if (x == "--help" || x == "-h") {
             std::printf(
-                "wrapper-v2 daemon (%s)\n"
+                "wrapper daemon (%s)\n"
                 "Usage: %s\n"
                 "\n"
                 "Default mode is a public supervisor HTTP server. Set\n"
@@ -159,7 +159,7 @@ bool consume_argv(int argc, char** argv, ProgramMode* mode) {
             return false;
         }
         std::fprintf(stderr,
-                     "wrapper-v2: unexpected argument '%s' "
+                     "wrapper: unexpected argument '%s' "
                      "(use environment variables; try '%s --help')\n",
                      argv[i], argv[0]);
         std::exit(2);
@@ -179,7 +179,7 @@ void maybe_auto_login_from_env(wrapper::apple::Account& account,
     if (user.empty() || pw == nullptr || *pw == '\0') {
         if ((pw != nullptr && *pw != '\0') && user.empty()) {
             std::fprintf(stderr,
-                         "wrapper-v2: WRAPPER_PASSWORD is set but WRAPPER_USERNAME "
+                         "wrapper: WRAPPER_PASSWORD is set but WRAPPER_USERNAME "
                          "is missing; skipping env auto-login\n");
         }
         return;
@@ -190,24 +190,24 @@ void maybe_auto_login_from_env(wrapper::apple::Account& account,
     std::string password(pw);
     if (!account.start_login(loader, runtime, std::move(user), std::move(password))) {
         std::fprintf(stderr,
-                     "wrapper-v2: env auto-login could not start (state=%s)\n",
+                     "wrapper: env auto-login could not start (state=%s)\n",
                      wrapper::apple::to_string(account.state()));
         return;
     }
     auto st = account.wait_for_settled_state(std::chrono::milliseconds(30000));
     if (st == wrapper::apple::LoginState::Authenticated) {
-        std::fprintf(stderr, "wrapper-v2: env auto-login succeeded\n");
+        std::fprintf(stderr, "wrapper: env auto-login succeeded\n");
     } else if (st == wrapper::apple::LoginState::Awaiting2FA) {
         std::fprintf(stderr,
-                     "wrapper-v2: env auto-login needs 2FA; POST /login/2fa with "
+                     "wrapper: env auto-login needs 2FA; POST /login/2fa with "
                      "{\"code\":\"...\"}\n");
     } else if (st == wrapper::apple::LoginState::Failed) {
         auto snap = account.public_snapshot();
-        std::fprintf(stderr, "wrapper-v2: env auto-login failed: %s (code %d)\n",
+        std::fprintf(stderr, "wrapper: env auto-login failed: %s (code %d)\n",
                      snap.last_error.c_str(), snap.last_error_code);
     } else {
         std::fprintf(stderr,
-                     "wrapper-v2: env auto-login still in progress or timed out "
+                     "wrapper: env auto-login still in progress or timed out "
                      "(state=%s)\n",
                      wrapper::apple::to_string(st));
     }
@@ -222,7 +222,7 @@ int main(int argc, char** argv) {
     std::setvbuf(stderr, nullptr, _IONBF, 0);
 
     std::fprintf(stderr,
-                 "wrapper-v2: daemon starting (argv0=%s, pid=%ld)\n",
+                 "wrapper: daemon starting (argv0=%s, pid=%ld)\n",
                  argc > 0 ? argv[0] : "?", static_cast<long>(getpid()));
 
     ProgramMode mode = ProgramMode::Supervisor;
@@ -261,12 +261,12 @@ int main(int argc, char** argv) {
         supervisor.mount(svr);
 
         std::fprintf(stderr,
-                     "wrapper-v2: %s supervisor listening on %s:%d "
+                     "wrapper: %s supervisor listening on %s:%d "
                      "(worker 127.0.0.1:%d)\n",
                      kVersion, listen_host.c_str(), listen_port, worker_port);
 
         if (!svr.listen(listen_host, listen_port)) {
-            std::fprintf(stderr, "wrapper-v2: supervisor bind failed on %s:%d\n",
+            std::fprintf(stderr, "wrapper: supervisor bind failed on %s:%d\n",
                          listen_host.c_str(), listen_port);
             return 1;
         }
@@ -274,7 +274,7 @@ int main(int argc, char** argv) {
         return 0;
     }
 
-    std::fprintf(stderr, "wrapper-v2: worker mode starting\n");
+    std::fprintf(stderr, "wrapper: worker mode starting\n");
 
     wrapper::ServerInfo info;
     info.version = kVersion;
@@ -287,7 +287,7 @@ int main(int argc, char** argv) {
     std::string libs_dir = env_or("WRAPPER_LIBS_DIR", "/system/lib64");
 
     if (info.apple_init_enabled) {
-        std::fprintf(stderr, "wrapper-v2: opening Apple libs from %s\n",
+        std::fprintf(stderr, "wrapper: opening Apple libs from %s\n",
                      libs_dir.c_str());
         if (loader.open(libs_dir)) {
             wrapper::apple::RuntimeConfig rcfg;
@@ -299,31 +299,31 @@ int main(int argc, char** argv) {
                         account.try_restore_cached_session(loader, runtime);
                     if (restored) {
                         std::fprintf(stderr,
-                                     "wrapper-v2: session restored from Apple cache "
+                                     "wrapper: session restored from Apple cache "
                                      "(GET /me without POST /login)\n");
                     }
                 } else {
                     std::fprintf(stderr,
-                                 "wrapper-v2: WRAPPER_RESTORE_SESSION=0, skipping "
+                                 "wrapper: WRAPPER_RESTORE_SESSION=0, skipping "
                                  "cached session probe\n");
                 }
             } else {
                 std::fprintf(stderr,
-                             "wrapper-v2: Apple runtime init failed after dlopen "
+                             "wrapper: Apple runtime init failed after dlopen "
                              "succeeded; the loaded libs may be from an unexpected "
                              "Apple Music native library version. Continuing in "
                              "stub mode.\n");
             }
         } else {
             std::fprintf(stderr,
-                         "wrapper-v2: Apple lib load failed (libs_dir=%s, error=%s). "
+                         "wrapper: Apple lib load failed (libs_dir=%s, error=%s). "
                          "Continuing in stub mode; HTTP API works but Apple-backed "
                          "endpoints will return 503.\n",
                          libs_dir.c_str(), loader.last_error().c_str());
         }
     } else {
         std::fprintf(stderr,
-                     "wrapper-v2: WRAPPER_APPLE_INIT=0, skipping Apple lib init "
+                     "wrapper: WRAPPER_APPLE_INIT=0, skipping Apple lib init "
                      "(stub mode: /health only; POST /login returns 503)\n");
     }
 
@@ -335,11 +335,11 @@ int main(int argc, char** argv) {
     wrapper::Server server(svr, runtime, loader, account, info);
     server.mount();
 
-    std::fprintf(stderr, "wrapper-v2: %s worker listening on %s:%d\n", kVersion,
+    std::fprintf(stderr, "wrapper: %s worker listening on %s:%d\n", kVersion,
                  listen_host.c_str(), listen_port);
 
     if (!svr.listen(listen_host, listen_port)) {
-        std::fprintf(stderr, "wrapper-v2: bind failed on %s:%d\n",
+        std::fprintf(stderr, "wrapper: bind failed on %s:%d\n",
                      listen_host.c_str(), listen_port);
         return 1;
     }
