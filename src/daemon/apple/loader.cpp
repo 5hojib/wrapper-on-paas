@@ -434,15 +434,15 @@ void Loader::foot_hill_get_persistent_key(abi::shared_ptr* ret,
     if (foot_hill_persistent_key_abi8_) {
         auto* fn = reinterpret_cast<abi::fn_SVFootHillSessionCtrl_getPersistentKey>(
             foot_hill_persistent_key_fn_);
-        s.SVFootHillSessionCtrl_getPersistentKey(
+        fn(
             ret, foothill_instance, adam_id, adam_id, key_uri, key_format,
-            key_format_ver, server_uri, protocol_type, fps_cert, fn);
+            key_format_ver, server_uri, protocol_type, fps_cert);
     } else {
         auto* fn = reinterpret_cast<abi::fn_SVFootHillSessionCtrl_getPersistentKey7>(
             foot_hill_persistent_key_fn_);
-        s.SVFootHillSessionCtrl_getPersistentKey7(
+        fn(
             ret, foothill_instance, adam_id, key_uri, key_format,
-            key_format_ver, server_uri, protocol_type, fps_cert, fn);
+            key_format_ver, server_uri, protocol_type, fps_cert);
     }
 }
 
