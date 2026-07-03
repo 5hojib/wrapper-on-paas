@@ -1,5 +1,6 @@
 #include "apple/tokens.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdint>
@@ -366,8 +367,9 @@ std::optional<std::string> extract_dsid_from_jwt(const std::string& jwt) {
             if (j.contains(k) && j[k].is_string()) {
                 auto cand = j[k].get<std::string>();
                 // dsid looks like "1234567890" - return only if numeric
-                bool numeric = !cand.empty();
-                for (char c : cand) numeric = numeric && (c >= '0' && c <= '9');
+                bool numeric = !cand.empty() && std::all_of(cand.begin(), cand.end(), [](char c) {
+                    return c >= '0' && c <= '9';
+                });
                 if (numeric) return cand;
             }
         }
