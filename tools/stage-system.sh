@@ -5,7 +5,7 @@
 # LIBS_VERSION.json.
 #
 # Usage:
-#   tools/stage-system.sh [--arch <x86_64|arm64-v8a>] [--rootfs <path>] [--ignore-hash]
+#   tools/stage-system.sh [--arch <x86_64>] [--rootfs <path>] [--ignore-hash]
 #
 # Defaults: --arch x86_64, --rootfs <repo>/rootfs
 set -euo pipefail

@@ -5,10 +5,10 @@
 # The bundle/APK file itself is not hashed; only extracted libraries are checked.
 #
 # Usage:
-#   extract-libs.sh --bundle <path-to-.apkm|.apk> [--arch <x86_64|arm64-v8a>] [--out <dir>] [--ignore-hash]
+#   extract-libs.sh --bundle <path-to-.apkm|.apk> [--arch <x86_64>] [--out <dir>] [--ignore-hash]
 #
 # Options:
-#   --arch <x86_64|arm64-v8a>    Which arch's libs to extract (default x86_64)
+#   --arch <x86_64>    Which arch's libs to extract (default x86_64)
 #   --out  <directory>           Where to drop the .so files (default: <repo>/rootfs/system/lib64)
 #   --ignore-hash                Copy expected files without SHA-256 verification
 set -euo pipefail
@@ -51,8 +51,7 @@ fi
 
 case "$ARCH" in
     x86_64)    PREFERRED_SPLIT="split_config.x86_64.apk"    ;;
-    arm64-v8a) PREFERRED_SPLIT="split_config.arm64_v8a.apk" ;;
-    *) echo "extract-libs: unsupported arch '$ARCH'" >&2; exit 2 ;;
+        *) echo "extract-libs: unsupported arch '$ARCH'" >&2; exit 2 ;;
 esac
 
 for c in jq unzip install; do
@@ -101,7 +100,6 @@ pick_lib_dir_for_arch() {
     local -a candidates=()
     case "$ARCH" in
         x86_64)    candidates=("lib/x86_64" "lib/x86") ;;
-        arm64-v8a) candidates=("lib/arm64-v8a" "lib/arm64") ;;
     esac
     local dir
     for dir in "${candidates[@]}"; do
@@ -141,10 +139,6 @@ split_name_score() {
             [[ "$base" == "$PREFERRED_SPLIT" ]] && score=100
             [[ "$base" == *x86_64* || "$base" == *x86-64* ]] && score=$((score + 50))
             [[ "$base" == *x86* ]] && score=$((score + 10))
-            ;;
-        arm64-v8a)
-            [[ "$base" == "$PREFERRED_SPLIT" ]] && score=100
-            [[ "$base" == *arm64_v8a* || "$base" == *arm64-v8a* || "$base" == *arm64* ]] && score=$((score + 50))
             ;;
     esac
     [[ "$base" == base.apk ]] && score=$((score - 20))

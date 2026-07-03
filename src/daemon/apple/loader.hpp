@@ -92,7 +92,7 @@ struct Symbols {
     abi::fn_Data_bytes      Data_bytes      = nullptr;
 
     abi::fn_HTTPMessage_ctor        HTTPMessage_ctor        = nullptr;
-    abi::fn_HTTPMessage_ctor_c1     HTTPMessage_ctor_c1     = nullptr;  // arm64 fallback
+    abi::fn_HTTPMessage_ctor_c1     HTTPMessage_ctor_c1     = nullptr;
     abi::fn_HTTPMessage_setHeader   HTTPMessage_setHeader   = nullptr;
     abi::fn_HTTPMessage_setBodyData HTTPMessage_setBodyData = nullptr;
 

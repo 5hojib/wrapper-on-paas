@@ -102,7 +102,7 @@ private:
 
     std::mutex         playback_mutex_;
     // Placement buffer for SVPlaybackLeaseManager (ctor + instance methods).
-    // Must cover the real object size; 16 was far too small and UB on arm64.
+    // Must cover the real object size; 16 was far too small and UB.
     alignas(16) unsigned char lease_mgr_[4096]{};
     void*    foothill_         = nullptr;
     bool     playback_ready_  = false;

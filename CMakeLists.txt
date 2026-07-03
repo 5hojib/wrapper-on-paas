@@ -13,7 +13,7 @@ cmake_minimum_required(VERSION 3.22)
 # avoids contaminating either build with the other's compiler.
 #
 # Usage:
-#   cmake -S . -B build -DTARGET_ARCH=x86_64    # or arm64-v8a
+#   cmake -S . -B build -DTARGET_ARCH=x86_64
 #   cmake --build build -j
 #
 # Required input:
@@ -31,7 +31,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # Options
 # -----------------------------------------------------------------------------
 set(TARGET_ARCH "x86_64" CACHE STRING "Target ABI for the chrooted daemon (matches extract-libs/stage-system --arch)")
-set_property(CACHE TARGET_ARCH PROPERTY STRINGS "x86_64" "arm64-v8a")
+set_property(CACHE TARGET_ARCH PROPERTY STRINGS "x86_64")
 
 option(WRAPPER_BUILD_DAEMON "Drive the NDK sub-build for the chrooted daemon" ON)
 
@@ -83,10 +83,8 @@ if(WRAPPER_BUILD_DAEMON)
 
     if(TARGET_ARCH STREQUAL "x86_64")
         set(_android_abi "x86_64")
-    elseif(TARGET_ARCH STREQUAL "arm64-v8a")
-        set(_android_abi "arm64-v8a")
     else()
-        message(FATAL_ERROR "TARGET_ARCH '${TARGET_ARCH}' is not supported (use x86_64 or arm64-v8a).")
+        message(FATAL_ERROR "TARGET_ARCH '${TARGET_ARCH}' is not supported (use x86_64).")
     endif()
 
     file(MAKE_DIRECTORY "${_daemon_build}")

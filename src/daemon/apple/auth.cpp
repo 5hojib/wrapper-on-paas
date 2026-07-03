@@ -8,7 +8,6 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#include "apple/aarch64_sret_thunks.hpp"
 #include "apple/loader.hpp"
 #include "apple/runtime.hpp"
 #include "apple/tokens.hpp"
@@ -23,7 +22,7 @@ void unlink_quiet(const char* path) {
 }
 
 // Apple writes mpl_db/kvs.sqlitedb the first time AuthenticateFlow succeeds.
-// Without that file, RequestContext::storeFrontIdentifier on arm64 dereferences
+// Without that file, RequestContext::storeFrontIdentifier dereferences
 // uninitialized internal state at offset 0x10 and SIGSEGVs (x86_64 returns an
 // empty string instead). Gate the cached-session probe on this file so a cold
 // `./data` mount does not crash the daemon at startup.
@@ -329,8 +328,7 @@ void Account::worker_main() {
     }
 
     abi::shared_ptr flow;
-    aarch64_sret::make_shared_authenticate_flow(&flow, &req_ctx,
-                                                s.make_shared_AuthenticateFlow);
+    s.make_shared_AuthenticateFlow(&flow, &req_ctx);
     if (flow.obj == nullptr) {
         finish_failed("make_shared<AuthenticateFlow> returned null", -3);
         return;

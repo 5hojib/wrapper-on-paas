@@ -31,10 +31,6 @@ RUN apt-get update && \
         jq \
         ninja-build \
         unzip \
-    && if [[ "$TARGET_ARCH" == "arm64-v8a" ]]; then \
-         apt-get install -y --no-install-recommends \
-           gcc-aarch64-linux-gnu g++-aarch64-linux-gnu; \
-       fi \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl -fSL -o /tmp/ndk.zip \
@@ -68,16 +64,8 @@ RUN test -f rootfs/system/bin/linker64 || { \
         exit 1; \
     }
 
-RUN host_cc=(); \
-    if [[ "$TARGET_ARCH" == "arm64-v8a" ]]; then \
-      host_cc=( \
-        -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
-        -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ \
-      ); \
-    fi && \
-    cmake -S . -B build -G Ninja \
+RUN cmake -S . -B build -G Ninja \
         -DTARGET_ARCH="${TARGET_ARCH}" \
-        "${host_cc[@]}" \
         -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}" && \
     cmake --build build -j
 

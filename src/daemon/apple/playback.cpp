@@ -13,7 +13,6 @@
 #include <nlohmann/json.hpp>
 
 #include "apple/abi.hpp"
-#include "apple/aarch64_sret_thunks.hpp"
 #include "apple/loader.hpp"
 #include "apple/runtime.hpp"
 
@@ -258,7 +257,7 @@ PlaybackResult fetch_playback_json(const Loader& loader,
 
     // PurchaseRequest is heavy-ish; upstream uses malloc(1024) and never frees.
     // Keep one 8 KiB thread-local buffer and skip destruction, matching the
-    // upstream lifetime model while leaving extra room for arm64 object size
+    // upstream lifetime model
     // and alignment.
     alignas(16) static thread_local std::uint8_t pr_buf[8192];
     std::memset(pr_buf, 0, sizeof(pr_buf));
@@ -337,8 +336,7 @@ PlaybackResult fetch_playback_json(const Loader& loader,
     if (purchase_response_obj != nullptr
         && s.PurchaseResponse_items != nullptr) {
         abi::std_vector items{};
-        aarch64_sret::purchase_response_items(&items, purchase_response_obj,
-                                              s.PurchaseResponse_items);
+        s.PurchaseResponse_items(&items, purchase_response_obj);
 
         const auto* begin = static_cast<abi::shared_ptr*>(items.begin);
         const auto* end   = static_cast<abi::shared_ptr*>(items.end);

@@ -1,10 +1,8 @@
-// Apple Music native-lib ABI bindings (x86_64 / arm64-v8a, APK 3.6.0-beta).
+// Apple Music native-lib ABI bindings (x86_64, APK 3.6.0-beta).
 //
 // Returning C++ objects by value from Apple code uses a hidden first parameter
 // (struct-return / sret). On x86_64 that slot is the first C argument; on
 // AArch64 it is passed in x8 while `this` stays in x0. Plain C calls into those
-// entry points break on arm64 — use aarch64_sret_thunks.hpp helpers there.
-//
 // We call into Apple's libstoreservicescore / libmediaplatform /
 // libandroidappmusic by way of the Itanium-mangled C++ symbols they
 // export. Each symbol below is declared as a function pointer type;
@@ -290,7 +288,7 @@ using fn_Data_bytes = const char* (*)(void* this_);
 using fn_HTTPMessage_ctor =
     void (*)(void* this_, std::string url, std::string method);
 
-// C1 (complete object constructor) – used as a fallback on arm64 when
+// C1 (complete object constructor)
 // HTTPMessage has virtual bases that C2 does not initialise.
 using fn_HTTPMessage_ctor_c1 =
     void (*)(void* this_, std::string url, std::string method);
@@ -313,8 +311,7 @@ using fn_URLRequest_ctor =
 using fn_URLRequest_setRequestParameter =
     void (*)(void* this_, std_string* name, std_string* value);
 
-// URLRequest::run(). Call through aarch64_sret::urlrequest_run so AArch64 gets
-// a harmless hidden-result scratch slot if the exported build expects one.
+// URLRequest::run().
 using fn_URLRequest_run      = void (*)(void* this_);
 using fn_URLRequest_error    = shared_ptr* (*)(void* this_);
 using fn_URLRequest_response = shared_ptr* (*)(void* this_);
@@ -423,7 +420,7 @@ using fn_SVFootHillSessionCtrl_instance = void* (*)();
 // getPersistentKey: Apple bumped the signature across Music app releases.
 // Itanium abbreviation S8_ is one trailing std::string const& per segment.
 //   - 7× S8_ after the first RK… = 8 string refs (adam, prefetch, uri, …).
-//     Used by zhaarey/apple-music-downloader agent-arm64.js and some APKs.
+//     Used by some APKs.
 //   - 6× S8_ = 7 string refs (no separate prefetch slot). Older libandroidappmusic.
 // Loader resolves whichever symbol exists; decrypt dispatches to the matching thunk.
 using fn_SVFootHillSessionCtrl_getPersistentKey =
@@ -670,12 +667,12 @@ inline constexpr const char* SVFootHillSessionCtrl_instance =
 // subsequent std::string arg is then `S8_`. So:
 //     N string args == 1 explicit `RKNSt...` + (N-1) `S8_`.
 //
-// 8 string params (= seven `S8_`). Used by zhaarey/agent-arm64.js on builds
+// 8 string params (= seven `S8_`).
 // where Apple split adam_id into a separate prefetch slot (adam_id duplicated).
 inline constexpr const char* SVFootHillSessionCtrl_getPersistentKey_8str =
     "_ZN21SVFootHillSessionCtrl16getPersistentKeyERKNSt6__ndk112basic_stringIcNS0_11char_traitsIcEENS0_9allocatorIcEEEES8_S8_S8_S8_S8_S8_S8_";
 
-// 7 string params (= six `S8_`). What `nm -D` shows on both arm64-v8a and
+// 7 string params (= six `S8_`). What `nm -D` shows on x86_64 and
 // x86_64 splits of Apple Music 3.6.0-beta-1109. No prefetch slot — one
 // adam_id, six other strings (uri, key format, key format version, server
 // uri, protocol type, fps cert).

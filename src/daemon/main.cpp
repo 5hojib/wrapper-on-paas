@@ -76,8 +76,6 @@ void on_crash(int sig, siginfo_t* info, void* ctx) {
     void* rip = nullptr;
 #ifdef __x86_64__
     if (uc) rip = reinterpret_cast<void*>(uc->uc_mcontext.gregs[REG_RIP]);
-#elif defined(__aarch64__)
-    if (uc) rip = reinterpret_cast<void*>(uc->uc_mcontext.pc);
 #endif
     char buf[128];
     int n = snprintf(buf, sizeof(buf),
@@ -220,8 +218,7 @@ void maybe_auto_login_from_env(wrapper::apple::Account& account,
 int main(int argc, char** argv) {
     // Force unbuffered stderr so any prints made before a SIGSEGV are visible.
     // Bionic typically does this already, but be defensive — we have lost
-    // diagnostics to flushing before, especially on aarch64 where DT_INIT
-    // crashes during dlopen kill the process before fclose() runs.
+    // diagnostics to flushing before.
     std::setvbuf(stderr, nullptr, _IONBF, 0);
 
     std::fprintf(stderr,

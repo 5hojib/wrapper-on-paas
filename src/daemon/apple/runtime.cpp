@@ -26,7 +26,6 @@
 #include <sstream>
 #include <string>
 
-#include "apple/aarch64_sret_thunks.hpp"
 #include "apple/auth.hpp"
 
 namespace wrapper::apple {
@@ -336,7 +335,7 @@ bool Runtime::init_dns_and_foothill(const Symbols& s,
 
     // DeviceGUID::instance() -> shared_ptr<DeviceGUID>
     trace("init_dns_and_foothill: DeviceGUID::instance");
-    aarch64_sret::device_guid_instance(&device_guid_, s.DeviceGUID_instance);
+    s.DeviceGUID_instance(&device_guid_);
     if (device_guid_.obj == nullptr) {
         std::fprintf(stderr, "runtime: DeviceGUID::instance returned null\n");
         return false;
@@ -352,9 +351,8 @@ bool Runtime::init_dns_and_foothill(const Symbols& s,
     static const std::uint8_t cfg_flag = 1;
     auto empty = abi::make_string_view("");
     trace("init_dns_and_foothill: DeviceGUID::configure");
-    aarch64_sret::device_guid_configure(
-        &cfg_ret, device_guid_.obj, &android_id, &empty, &cfg_kind, &cfg_flag,
-        s.DeviceGUID_configure);
+    s.DeviceGUID_configure(
+        &cfg_ret, device_guid_.obj, &android_id, &empty, &cfg_kind, &cfg_flag);
     trace("init_dns_and_foothill: done");
 
     return true;
@@ -367,8 +365,7 @@ bool Runtime::init_request_context(const Symbols& s,
     std::string mpl_db = cfg.base_dir + "/mpl_db";
     auto mpl_db_view = abi::make_string_view(mpl_db.c_str());
     trace("init_request_context: make_shared<RequestContext>");
-    aarch64_sret::make_shared_request_context(&request_ctx_, &mpl_db_view,
-                                             s.make_shared_RequestContext);
+    s.make_shared_RequestContext(&request_ctx_, &mpl_db_view);
 
     if (request_ctx_.obj == nullptr) {
         std::fprintf(stderr, "runtime: make_shared<RequestContext> returned null\n");
@@ -427,8 +424,7 @@ bool Runtime::init_request_context(const Symbols& s,
     // RequestContext::init hidden return buffer (same alignment as cfg_ret).
     alignas(16) static std::uint8_t rci_ret[88];
     trace("init_request_context: RequestContext::init");
-    aarch64_sret::request_context_init(&rci_ret, request_ctx_.obj, &rcc,
-                                       s.RequestContext_init);
+    s.RequestContext_init(&rci_ret, request_ctx_.obj, &rcc);
 
     auto fp_dir = abi::make_string_view(cfg.base_dir.c_str());
     trace("init_request_context: setFairPlayDirectoryPath");
@@ -441,8 +437,8 @@ bool Runtime::init_request_context(const Symbols& s,
 bool Runtime::init_presentation_interface(const Symbols& s) {
     // make_shared<AndroidPresentationInterface>()
     trace("init_presentation_interface: make_shared<AndroidPresentationInterface>");
-    aarch64_sret::make_shared_android_presentation_interface(
-        &presentation_interface_, s.make_shared_AndroidPresentationInterface);
+    s.make_shared_AndroidPresentationInterface(
+        &presentation_interface_);
     if (presentation_interface_.obj == nullptr) {
         std::fprintf(stderr,
                      "runtime: make_shared<AndroidPresentationInterface> returned null\n");

@@ -36,13 +36,7 @@ The **x86_64** binaries were taken verbatim from
 which sourced them from an Android x86_64 system image (likely API 21-29
 era based on file sizes and exported symbols).
 
-The **arm64-v8a** set was taken verbatim from
-[`WorldObservationLog/wrapper`](https://github.com/WorldObservationLog/wrapper)
-branch **`arm64`** `rootfs/system/` (same layout as x86: `bin/linker64`,
-`lib64/*.so`, etc.). The IANA timezone blob `usr/share/zoneinfo/tzdata` is
-the same bytes on both arches (single file path; identical SHA-256 pin).
-
-SHA-256 digests for both arches are pinned in
+SHA-256 digests are pinned in
 [`LIBS_VERSION.json`](../../LIBS_VERSION.json) under `.android_system.<arch>`
 and verified by `tools/stage-system.sh`.
 

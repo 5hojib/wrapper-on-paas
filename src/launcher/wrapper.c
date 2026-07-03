@@ -5,8 +5,7 @@
  * linker (linker64) and Apple Music's native libs to a daemon binary at
  * /system/bin/main, then execs the daemon.
  *
- * Layout (/system/bin/linker64, /system/lib64) is the same for x86_64 and
- * arm64-v8a rootfs trees; the host binary must match the image arch (see Dockerfile).
+ * Layout (/system/bin/linker64, /system/lib64) is the same for x86_64 rootfs trees; the host binary must match the image arch (see Dockerfile).
  *
  * This is the host-Linux-side launcher. It is intentionally tiny and has no
  * dependency on the daemon's HTTP code or on the Apple libs.

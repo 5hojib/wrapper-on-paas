@@ -1,6 +1,5 @@
 #include "apple/loader.hpp"
 
-#include "apple/aarch64_sret_thunks.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -236,7 +235,7 @@ bool Loader::open(const std::string& libs_dir) {
     RESOLVE(Data_bytes,      Data_bytes);
 
     RESOLVE(HTTPMessage_ctor,        HTTPMessage_ctor);
-    // C1 is optional: arm64 builds may need the complete-object ctor
+    // C1 is optional is needed for the complete-object ctor
     // when HTTPMessage has virtual bases.  If it’s absent we fall back to C2.
     {
         dlerror();
@@ -435,13 +434,13 @@ void Loader::foot_hill_get_persistent_key(abi::shared_ptr* ret,
     if (foot_hill_persistent_key_abi8_) {
         auto* fn = reinterpret_cast<abi::fn_SVFootHillSessionCtrl_getPersistentKey>(
             foot_hill_persistent_key_fn_);
-        aarch64_sret::svfoot_get_persistent_key(
+        s.SVFootHillSessionCtrl_getPersistentKey(
             ret, foothill_instance, adam_id, adam_id, key_uri, key_format,
             key_format_ver, server_uri, protocol_type, fps_cert, fn);
     } else {
         auto* fn = reinterpret_cast<abi::fn_SVFootHillSessionCtrl_getPersistentKey7>(
             foot_hill_persistent_key_fn_);
-        aarch64_sret::svfoot_get_persistent_key_7str(
+        s.SVFootHillSessionCtrl_getPersistentKey7(
             ret, foothill_instance, adam_id, key_uri, key_format,
             key_format_ver, server_uri, protocol_type, fps_cert, fn);
     }

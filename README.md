@@ -123,9 +123,6 @@ Optional `WRAPPER_APPLE_ID` only sets the `apple_id` label in `/me` after restor
         ├── x86_64/
         │   ├── bin/linker64
         │   └── lib64/*.so
-        └── arm64-v8a/
-            ├── bin/linker64
-            └── lib64/*.so
 ```
 
 ## Building
@@ -209,41 +206,6 @@ The daemon binds port 80 inside the container and the compose file maps it
 to host port 80 by default. Override with `HTTP_PORT=8080 docker compose up`
 on machines that already have something on `:80`.
 
-### arm64-v8a image (Apple Silicon / AArch64 Linux)
-
-Stage **arm64-v8a** Android system binaries and Apple Music native libraries,
-then build a **linux/arm64** image so `wrapper`, the NDK daemon, and the staged
-`linker64` / `.so` set share the same ABI.
-
-The Docker **compile** stage is always **linux/amd64** (Google ships the Linux NDK as an
-x86_64-host ZIP only). The image then cross-compiles `wrapper` for AArch64 when
-`TARGET_ARCH=arm64-v8a`. Set **runtime** platform to arm64; `BUILD_PLATFORM` in Compose is
-ignored but kept for compatibility.
-
-Extract and stage the arm64 files:
-
-```bash
-bash tools/extract-libs.sh --bundle path/to/local/apple-music.apk --arch arm64-v8a
-bash tools/stage-system.sh --arch arm64-v8a
-```
-
-Or use a local `.apkm` bundle:
-
-```bash
-bash tools/extract-libs.sh --bundle path/to/local/apple-music.apkm --arch arm64-v8a
-bash tools/stage-system.sh --arch arm64-v8a
-```
-
-Build the arm64 image:
-
-```bash
-TARGET_ARCH=arm64-v8a RUNTIME_PLATFORM=linux/arm64 \
-  docker compose up --build
-```
-
-On an **x86_64** host, `docker compose` / `docker run` need **QEMU** (binfmt) to run a
-`linux/arm64` container. On an **arm64** host, run the image **natively** (no emulation).
-
 ### Daemon configuration
 
 The daemon reads `WRAPPER_*` environment variables (forwarded via
@@ -282,9 +244,7 @@ test, with one repository secret:
   `.apkm`. The artifact is downloaded inside CI only, extracted with
   `tools/extract-libs.sh`, and is not committed.
 
-**Matrix:** both `x86_64` and `arm64-v8a` jobs use `ubuntu-latest`. The arm64 image is
-`linux/arm64` at runtime; QEMU is enabled before the smoke `docker run` so the job works
-on amd64 GitHub runners. The compile stage stays **linux/amd64** for the official NDK ZIP.
+**Matrix:** `x86_64` jobs use `ubuntu-latest`.
 
 Pull requests opened from forks skip the build job because they cannot read the
 secret.

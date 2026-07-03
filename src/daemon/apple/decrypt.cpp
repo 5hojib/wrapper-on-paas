@@ -10,7 +10,6 @@
 #include <utility>
 
 #include "apple/fairplay_cert.inc"
-#include "apple/aarch64_sret_thunks.hpp"
 #include "apple/loader.hpp"
 #include "apple/runtime.hpp"
 
@@ -126,8 +125,7 @@ DecryptResult decrypt_samples(const Loader& loader,
 
             std::fprintf(stderr, "decrypt: decryptContext adam=%s\n", adam_id.c_str());
             abi::shared_ptr sv_ctx{};
-            aarch64_sret::svfoot_decrypt_context(&sv_ctx, fh, persist.obj,
-                                                s.SVFootHillSessionCtrl_decryptContext);
+            s.SVFootHillSessionCtrl_decryptContext(&sv_ctx, fh, persist.obj);
 
             if (sv_ctx.obj == nullptr) {
                 *error = "decryptContext failed";

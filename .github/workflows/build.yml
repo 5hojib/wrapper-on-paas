@@ -29,9 +29,6 @@ jobs:
           - arch: x86_64
             runner: ubuntu-latest
             docker_platform: linux/amd64
-          - arch: arm64-v8a
-            runner: ubuntu-latest
-            docker_platform: linux/arm64
 
     env:
       APK_URL: ${{ secrets.APK_URL }}
@@ -39,7 +36,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # linux/arm64 images need binfmt/qemu to execute on GHA amd64 runners (smoke test).
       - name: Set up QEMU
         if: matrix.docker_platform != 'linux/amd64'
         uses: docker/setup-qemu-action@v3

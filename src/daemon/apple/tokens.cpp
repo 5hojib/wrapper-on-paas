@@ -11,7 +11,6 @@
 
 #include <nlohmann/json.hpp>
 
-#include "apple/aarch64_sret_thunks.hpp"
 #include "apple/auth.hpp"
 #include "apple/loader.hpp"
 
@@ -104,7 +103,7 @@ std::string read_std_string(const abi::std_string& s) {
 // URLRequest / HTTPRequest can keep shared/weak references after run() returns,
 // and a later request may release them. If this storage lives on the stack, the
 // second token request can end up touching a reused/zeroed control block and
-// crash through a null vtable (arm64 commonly reports fault_addr=0x10).
+// crash through a null vtable.
 struct HTTPMessageHolder {
     static constexpr std::size_t kSize = 4096;
     std::uint8_t* buf = nullptr;
@@ -219,7 +218,7 @@ UrlRequestResult run_request(
         set_url_param(s, url_req, p.first.c_str(), p.second.c_str());
     }
 
-    aarch64_sret::urlrequest_run(url_req, s.URLRequest_run);
+    s.URLRequest_run(url_req);
 
     abi::shared_ptr* err = s.URLRequest_error(url_req);
     if (err != nullptr && err->obj != nullptr) {
@@ -269,8 +268,8 @@ std::string post_json(const Symbols& s,
 std::string harvest_storefront(const Symbols& s, abi::shared_ptr req_ctx) {
     abi::std_string out{};
     abi::shared_ptr null_url_bag{};
-    aarch64_sret::request_context_store_front_identifier(
-        &out, req_ctx.obj, &null_url_bag, s.RequestContext_storeFrontIdentifier);
+    s.RequestContext_storeFrontIdentifier(
+        &out, req_ctx.obj, &null_url_bag);
     return read_std_string(out);
 }
 
@@ -280,7 +279,7 @@ std::string device_guid_string(const Symbols& s, abi::shared_ptr device_guid) {
     // hidden first arg. The first 8 bytes are the Data* whose bytes()
     // we want.
     void* ret[2] = {nullptr, nullptr};
-    aarch64_sret::device_guid_guid(ret, device_guid.obj, s.DeviceGUID_guid);
+    s.DeviceGUID_guid(ret, device_guid.obj);
     if (ret[0] == nullptr) return {};
     const char* bytes = s.Data_bytes(ret[0]);
     if (bytes == nullptr) return {};
