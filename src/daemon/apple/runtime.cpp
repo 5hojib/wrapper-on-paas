@@ -22,6 +22,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <functional>
+#include <iterator>
 #include <new>
 #include <sstream>
 #include <string>
@@ -154,6 +155,7 @@ extern "C" void wrapper_dialog_handler(long dialog_id,
     if (buttons != nullptr && buttons->begin != nullptr && buttons->end != nullptr) {
         auto* b_begin = static_cast<abi::shared_ptr*>(buttons->begin);
         auto* b_end   = static_cast<abi::shared_ptr*>(buttons->end);
+        button_labels.reserve(std::distance(b_begin, b_end));
         for (auto* b = b_begin; b != b_end; ++b) {
             if (b->obj == nullptr) continue;
             std::string bt = read_apple_string(sy.ProtocolButton_title(b->obj));
