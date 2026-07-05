@@ -567,7 +567,7 @@ void Server::mount() {
         {
             std::lock_guard<std::mutex> lock(rt_.playback_mutex());
             dr = apple::decrypt_samples(loader_, rt_, std::move(frame.adam_id), std::move(frame.uri),
-                                        std::move(frame.samples));
+                                        frame.samples);
         }
         decrypt_done->store(true, std::memory_order_release);
 

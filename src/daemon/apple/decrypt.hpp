@@ -24,6 +24,6 @@ DecryptResult decrypt_samples(const Loader& loader,
                               Runtime&      runtime,
                               std::string   adam_id,
                               std::string   key_uri,
-                              std::vector<std::vector<std::uint8_t>> ciphertexts);
+                              const std::vector<std::vector<std::uint8_t>>& ciphertexts);
 
 }  // namespace wrapper::apple
