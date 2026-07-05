@@ -215,6 +215,18 @@ UrlRequestResult run_request(
     std::memset(url_req, 0, kUrlReqSize);
     s.URLRequest_ctor(url_req, &msg.sp, &req_ctx);
 
+    struct UrlRequestCleanup {
+        const Symbols& s;
+        void* req;
+        void* raw_ptr;
+        ~UrlRequestCleanup() {
+            if (s.URLRequest_dtor) {
+                s.URLRequest_dtor(req);
+            }
+            std::free(raw_ptr);
+        }
+    } cleanup{s, url_req, url_req_raw};
+
     for (const auto& p : params) {
         set_url_param(s, url_req, p.first.c_str(), p.second.c_str());
     }
