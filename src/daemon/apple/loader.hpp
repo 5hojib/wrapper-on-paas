@@ -97,6 +97,7 @@ struct Symbols {
     abi::fn_HTTPMessage_setBodyData HTTPMessage_setBodyData = nullptr;
 
     abi::fn_URLRequest_ctor              URLRequest_ctor              = nullptr;
+    abi::fn_dtor_void                    URLRequest_dtor              = nullptr;
     abi::fn_URLRequest_setRequestParameter URLRequest_setRequestParameter = nullptr;
     abi::fn_URLRequest_run               URLRequest_run               = nullptr;
     abi::fn_URLRequest_error             URLRequest_error             = nullptr;
@@ -105,6 +106,7 @@ struct Symbols {
 
     // ---- PurchaseRequest / protocolDictionary / CoreFoundation ----
     abi::fn_PurchaseRequest_ctor                     PurchaseRequest_ctor                     = nullptr;
+    abi::fn_dtor_void                                PurchaseRequest_dtor                     = nullptr;
     abi::fn_PurchaseRequest_setProcessDialogActions  PurchaseRequest_setProcessDialogActions  = nullptr;
     abi::fn_PurchaseRequest_set_string               PurchaseRequest_setURLBagKey             = nullptr;
     abi::fn_PurchaseRequest_set_string               PurchaseRequest_setBuyParameters         = nullptr;
@@ -112,6 +114,7 @@ struct Symbols {
     abi::fn_PurchaseRequest_response                 PurchaseRequest_response                 = nullptr;
     abi::fn_PurchaseResponse_error                   PurchaseResponse_error                   = nullptr;
     abi::fn_PurchaseResponse_items                   PurchaseResponse_items                   = nullptr;
+    abi::fn_dtor_vector                              vector_PurchaseItem_dtor                 = nullptr;
     abi::fn_PurchaseItem_dictionary                  PurchaseItem_dictionary                  = nullptr;
     abi::fn_URLRequest_setURLResponsePreprocessor    URLRequest_setURLResponsePreprocessor    = nullptr;
     abi::fn_URLResponse_protocolDictionary           URLResponse_protocolDictionary           = nullptr;

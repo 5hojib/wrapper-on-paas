@@ -329,6 +329,14 @@ void Account::worker_main() {
 
     abi::shared_ptr flow;
     s.make_shared_AuthenticateFlow(&flow, &req_ctx);
+
+    struct AuthFlowCleanup {
+        abi::shared_ptr& flow;
+        ~AuthFlowCleanup() {
+            flow.reset();
+        }
+    } flow_cleanup{flow};
+
     if (flow.obj == nullptr) {
         finish_failed("make_shared<AuthenticateFlow> returned null", -3);
         return;
