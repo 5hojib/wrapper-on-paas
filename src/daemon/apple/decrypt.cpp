@@ -63,7 +63,9 @@ DecryptResult decrypt_samples(const Loader& loader,
                               Runtime&      runtime,
                               std::string   adam_id,
                               std::string   key_uri,
-                              const std::vector<std::vector<std::uint8_t>>& ciphertexts) {
+                              const std::vector<std::uint32_t>& sample_lengths,
+                              const std::uint8_t* ciphertexts_data,
+                              std::uint8_t* plaintexts_data) {
     DecryptResult out;
     if (!loader.ok() || !loader.fairplay_decrypt_available()) {
         out.error = "FairPlay decrypt chain not loaded";
@@ -77,7 +79,7 @@ DecryptResult decrypt_samples(const Loader& loader,
         out.error = "adam_id and uri are required";
         return out;
     }
-    if (ciphertexts.empty()) {
+    if (sample_lengths.empty()) {
         out.error = "at least one sample required";
         return out;
     }
@@ -86,7 +88,6 @@ DecryptResult decrypt_samples(const Loader& loader,
     void*          fh = runtime.foothill_session();
 
     auto decrypt_once = [&](bool allow_cache,
-                            const std::vector<std::vector<std::uint8_t>>& chunks,
                             std::string* error) -> DecryptResult {
         DecryptResult attempt;
         void* kd = nullptr;
@@ -101,70 +102,84 @@ DecryptResult decrypt_samples(const Loader& loader,
         }
 
         if (kd == nullptr) {
-            std::fprintf(stderr, "decrypt: getPersistentKey adam=%s samples=%zu\n",
-                         adam_id.c_str(), chunks.size());
-            auto        default_id = abi::make_string_view(adam_id.c_str());
-            auto        uri        = abi::make_string_view(key_uri.c_str());
-            auto        key_format = abi::make_string_view("com.apple.streamingkeydelivery");
-            auto        key_ver    = abi::make_string_view("1");
-            auto        server_uri =
-                abi::make_string_view("https://play.itunes.apple.com/WebObjects/MZPlay.woa/music/fps");
-            auto        protocol   = abi::make_string_view("simplified");
-            auto        fps_cert   = abi::make_string_view(kFairPlayCert);
+            std::lock_guard<std::mutex> lock(runtime.playback_mutex());
 
-            abi::shared_ptr persist{};
-            loader.foot_hill_get_persistent_key(
-                &persist, fh,
-                &default_id, &uri, &key_format, &key_ver,
-                &server_uri, &protocol, &fps_cert);
-
-            if (persist.obj == nullptr) {
-                *error = "getPersistentKey failed (key or lease?)";
-                return attempt;
+            // Double-check cache inside lock
+            if (allow_cache) {
+                kd = find_cached_kd(adam_id, key_uri);
             }
 
-            std::fprintf(stderr, "decrypt: decryptContext adam=%s\n", adam_id.c_str());
-            abi::shared_ptr sv_ctx{};
-            s.SVFootHillSessionCtrl_decryptContext(&sv_ctx, fh, persist.obj);
-
-            if (sv_ctx.obj == nullptr) {
-                *error = "decryptContext failed";
-                return attempt;
-            }
-
-            // Upstream main.c does TWO dereferences:
-            //   void* p = *kdContext_method(ctx);   // *(void**) -> void*
-            //   ... NfcRKVn(*(void**)p, ...)         // re-cast and deref again
-            // i.e. fp_sample_decrypt receives **kdContext_method(ctx). Doing only
-            // one deref passes the kd-handle struct pointer instead of the actual
-            // engine state pointer; fp_sample_decrypt doesn't error but the
-            // produced plaintext is garbage (audio plays back unplayable).
-            void** kd_pp = s.SVFootHillPContext_kdContext(sv_ctx.obj);
-            if (kd_pp == nullptr || *kd_pp == nullptr) {
-                *error = "kdContext is null";
-                return attempt;
-            }
-            kd = *reinterpret_cast<void**>(*kd_pp);
             if (kd == nullptr) {
-                *error = "kdContext inner pointer is null";
-                return attempt;
+                std::fprintf(stderr, "decrypt: getPersistentKey adam=%s samples=%zu\n",
+                             adam_id.c_str(), sample_lengths.size());
+                auto        default_id = abi::make_string_view(adam_id.c_str());
+                auto        uri        = abi::make_string_view(key_uri.c_str());
+                auto        key_format = abi::make_string_view("com.apple.streamingkeydelivery");
+                auto        key_ver    = abi::make_string_view("1");
+                auto        server_uri =
+                    abi::make_string_view("https://play.itunes.apple.com/WebObjects/MZPlay.woa/music/fps");
+                auto        protocol   = abi::make_string_view("simplified");
+                auto        fps_cert   = abi::make_string_view(kFairPlayCert);
+
+                abi::shared_ptr persist{};
+                loader.foot_hill_get_persistent_key(
+                    &persist, fh,
+                    &default_id, &uri, &key_format, &key_ver,
+                    &server_uri, &protocol, &fps_cert);
+
+                if (persist.obj == nullptr) {
+                    *error = "getPersistentKey failed (key or lease?)";
+                    return attempt;
+                }
+
+                std::fprintf(stderr, "decrypt: decryptContext adam=%s\n", adam_id.c_str());
+                abi::shared_ptr sv_ctx{};
+                s.SVFootHillSessionCtrl_decryptContext(&sv_ctx, fh, persist.obj);
+
+                if (sv_ctx.obj == nullptr) {
+                    *error = "decryptContext failed";
+                    return attempt;
+                }
+
+                // Upstream main.c does TWO dereferences:
+                //   void* p = *kdContext_method(ctx);   // *(void**) -> void*
+                //   ... NfcRKVn(*(void**)p, ...)         // re-cast and deref again
+                // i.e. fp_sample_decrypt receives **kdContext_method(ctx). Doing only
+                // one deref passes the kd-handle struct pointer instead of the actual
+                // engine state pointer; fp_sample_decrypt doesn't error but the
+                // produced plaintext is garbage (audio plays back unplayable).
+                void** kd_pp = s.SVFootHillPContext_kdContext(sv_ctx.obj);
+                if (kd_pp == nullptr || *kd_pp == nullptr) {
+                    *error = "kdContext is null";
+                    return attempt;
+                }
+                kd = *reinterpret_cast<void**>(*kd_pp);
+                if (kd == nullptr) {
+                    *error = "kdContext inner pointer is null";
+                    return attempt;
+                }
+
+                store_cached_kd(adam_id, key_uri, kd);
+
+                // Intentionally no shared_ptr dtors — see block comment above.
+                (void)persist;
+                (void)sv_ctx;
             }
-
-            store_cached_kd(adam_id, key_uri, kd);
-
-            // Intentionally no shared_ptr dtors — see block comment above.
-            (void)persist;
-            (void)sv_ctx;
         }
 
-        std::fprintf(stderr, "decrypt: fp_sample_decrypt samples=%zu\n", chunks.size());
+        std::fprintf(stderr, "decrypt: fp_sample_decrypt samples=%zu\n", sample_lengths.size());
 
-        attempt.plaintexts.resize(chunks.size());
+        std::vector<std::uint64_t> offsets(sample_lengths.size());
+        std::uint64_t current_offset = 0;
+        for (size_t i = 0; i < sample_lengths.size(); ++i) {
+            offsets[i] = current_offset;
+            current_offset += sample_lengths[i];
+        }
 
         unsigned int hw_concurrency = std::thread::hardware_concurrency();
         unsigned int num_threads = (hw_concurrency == 0) ? 4 : hw_concurrency;
-        if (num_threads > chunks.size()) {
-            num_threads = chunks.size();
+        if (num_threads > sample_lengths.size()) {
+            num_threads = sample_lengths.size();
         }
 
         std::vector<std::thread> threads;
@@ -173,12 +188,12 @@ DecryptResult decrypt_samples(const Loader& loader,
 
         for (unsigned int t = 0; t < num_threads; ++t) {
             threads.emplace_back([&, t]() {
-                for (size_t i = t; i < chunks.size(); i += num_threads) {
+                for (size_t i = t; i < sample_lengths.size(); i += num_threads) {
                     if (error_occurred.load(std::memory_order_relaxed)) {
                         break;
                     }
 
-                    if (chunks[i].empty()) {
+                    if (sample_lengths[i] == 0) {
                         std::lock_guard<std::mutex> lock(error_mutex);
                         if (!error_occurred.exchange(true)) {
                             *error = "empty sample";
@@ -186,11 +201,10 @@ DecryptResult decrypt_samples(const Loader& loader,
                         break;
                     }
 
-                    // Copy the ciphertext chunk into the plaintext buffer
-                    attempt.plaintexts[i] = chunks[i];
-                    auto& chunk = attempt.plaintexts[i];
+                    const std::uint8_t* chunk_cipher = ciphertexts_data + offsets[i];
+                    std::uint8_t* chunk_plain = plaintexts_data + offsets[i];
 
-                    const long status = s.fp_sample_decrypt(kd, 5u, chunk.data(), chunk.data(), chunk.size());
+                    const long status = s.fp_sample_decrypt(kd, 5u, const_cast<std::uint8_t*>(chunk_cipher), chunk_plain, sample_lengths[i]);
                     if (status < 0) {
                         std::lock_guard<std::mutex> lock(error_mutex);
                         if (!error_occurred.exchange(true)) {
@@ -210,7 +224,6 @@ DecryptResult decrypt_samples(const Loader& loader,
         }
 
         if (error_occurred.load()) {
-            attempt.plaintexts.clear();
             return attempt;
         }
 
@@ -220,7 +233,7 @@ DecryptResult decrypt_samples(const Loader& loader,
 
     std::string first_error;
     try {
-        out = decrypt_once(true, ciphertexts, &first_error);
+        out = decrypt_once(true, &first_error);
     } catch (const std::exception& e) {
         first_error = e.what();
     } catch (...) {
