@@ -63,7 +63,7 @@ DecryptResult decrypt_samples(const Loader& loader,
                               Runtime&      runtime,
                               std::string   adam_id,
                               std::string   key_uri,
-                              std::vector<std::vector<std::uint8_t>> ciphertexts) {
+                              const std::vector<std::vector<std::uint8_t>>& ciphertexts) {
     DecryptResult out;
     if (!loader.ok() || !loader.fairplay_decrypt_available()) {
         out.error = "FairPlay decrypt chain not loaded";
@@ -86,7 +86,7 @@ DecryptResult decrypt_samples(const Loader& loader,
     void*          fh = runtime.foothill_session();
 
     auto decrypt_once = [&](bool allow_cache,
-                            std::vector<std::vector<std::uint8_t>> chunks,
+                            const std::vector<std::vector<std::uint8_t>>& chunks,
                             std::string* error) -> DecryptResult {
         DecryptResult attempt;
         void* kd = nullptr;
@@ -178,14 +178,17 @@ DecryptResult decrypt_samples(const Loader& loader,
                         break;
                     }
 
-                    auto& chunk = chunks[i];
-                    if (chunk.empty()) {
+                    if (chunks[i].empty()) {
                         std::lock_guard<std::mutex> lock(error_mutex);
                         if (!error_occurred.exchange(true)) {
                             *error = "empty sample";
                         }
                         break;
                     }
+
+                    // Copy the ciphertext chunk into the plaintext buffer
+                    attempt.plaintexts[i] = chunks[i];
+                    auto& chunk = attempt.plaintexts[i];
 
                     const long status = s.fp_sample_decrypt(kd, 5u, chunk.data(), chunk.data(), chunk.size());
                     if (status < 0) {
@@ -196,8 +199,6 @@ DecryptResult decrypt_samples(const Loader& loader,
                         }
                         break;
                     }
-
-                    attempt.plaintexts[i] = std::move(chunk);
                 }
             });
         }
