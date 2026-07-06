@@ -248,7 +248,6 @@ bool Loader::open(const std::string& libs_dir) {
     RESOLVE(HTTPMessage_setBodyData, HTTPMessage_setBodyData);
 
     RESOLVE(URLRequest_ctor,              URLRequest_ctor);
-    RESOLVE(URLRequest_dtor,              URLRequest_dtor);
     RESOLVE(URLRequest_setRequestParameter, URLRequest_setRequestParameter);
     RESOLVE(URLRequest_run,               URLRequest_run);
     RESOLVE(URLRequest_error,             URLRequest_error);
@@ -257,7 +256,6 @@ bool Loader::open(const std::string& libs_dir) {
 
     // ---- PurchaseRequest + protocolDictionary ----
     RESOLVE(PurchaseRequest_ctor,                    PurchaseRequest_ctor);
-    RESOLVE(PurchaseRequest_dtor,                    PurchaseRequest_dtor);
     RESOLVE(PurchaseRequest_setProcessDialogActions, PurchaseRequest_setProcessDialogActions);
     RESOLVE(PurchaseRequest_setURLBagKey,            PurchaseRequest_setURLBagKey);
     RESOLVE(PurchaseRequest_setBuyParameters,        PurchaseRequest_setBuyParameters);
@@ -265,7 +263,6 @@ bool Loader::open(const std::string& libs_dir) {
     RESOLVE(PurchaseRequest_response,                PurchaseRequest_response);
     RESOLVE(PurchaseResponse_error,                  PurchaseResponse_error);
     RESOLVE(PurchaseResponse_items,                  PurchaseResponse_items);
-    RESOLVE(vector_PurchaseItem_dtor,                vector_PurchaseItem_dtor);
     RESOLVE(PurchaseItem_dictionary,                 PurchaseItem_dictionary);
     RESOLVE(URLRequest_setURLResponsePreprocessor,   URLRequest_setURLResponsePreprocessor);
     RESOLVE(URLResponse_protocolDictionary,          URLResponse_protocolDictionary);

@@ -27,7 +27,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <memory>
 #include <string>
 
 namespace wrapper::apple::abi {
@@ -45,20 +44,7 @@ namespace wrapper::apple::abi {
 struct shared_ptr {
     void* obj = nullptr;
     void* ctrl_blk = nullptr;
-
-    // libc++ std::shared_ptr and std::shared_ptr<void> have the same layout
-    // as this struct, so we can clean up any Apple-allocated shared_ptr
-    // by casting and resetting.
-    void reset();
 };
-
-inline void shared_ptr::reset() {
-    if (ctrl_blk != nullptr) {
-        reinterpret_cast<std::shared_ptr<void>*>(this)->reset();
-        obj = nullptr;
-        ctrl_blk = nullptr;
-    }
-}
 
 // std::__ndk1::basic_string<char> on x86_64 uses the libc++ "long" /
 // "short" union layout. Size: 24 bytes. Short mode uses the low bit
@@ -478,9 +464,6 @@ using fn_SVFootHillSessionCtrl_resetAllContexts = void (*)(void* fh);
 
 using fn_shared_ptr_SVFootHillPContext_dtor = void (*)(shared_ptr* this_);
 
-using fn_dtor_void = void (*)(void* this_);
-using fn_dtor_vector = void (*)(std_vector* this_);
-
 // Mangled symbol names. These are the *strings* we feed to dlsym.
 // Kept centrally so that the Loader implementation does not embed
 // them inline (easier to audit and regenerate from `nm` output).
@@ -626,8 +609,6 @@ inline constexpr const char* URLRequest_ctor =
     "_ZN17storeservicescore10URLRequestC2ERKNSt6__ndk110shared_ptrIN13mediaplatform11HTTPMessageEEERKNS2_INS_14RequestContextEEE";
 inline constexpr const char* URLRequest_setRequestParameter =
     "_ZN17storeservicescore10URLRequest19setRequestParameterERKNSt6__ndk112basic_stringIcNS1_11char_traitsIcEENS1_9allocatorIcEEEES9_";
-inline constexpr const char* URLRequest_dtor =
-    "_ZN17storeservicescore10URLRequestD2Ev";
 inline constexpr const char* URLRequest_run =
     "_ZN17storeservicescore10URLRequest3runEv";
 inline constexpr const char* URLRequest_error =
@@ -641,8 +622,6 @@ inline constexpr const char* URLResponse_underlyingResponse =
 
 inline constexpr const char* PurchaseRequest_ctor =
     "_ZN17storeservicescore15PurchaseRequestC2ERKNSt6__ndk110shared_ptrINS_14RequestContextEEE";
-inline constexpr const char* PurchaseRequest_dtor =
-    "_ZN17storeservicescore15PurchaseRequestD2Ev";
 inline constexpr const char* PurchaseRequest_setProcessDialogActions =
     "_ZN17storeservicescore15PurchaseRequest23setProcessDialogActionsEb";
 inline constexpr const char* PurchaseRequest_setURLBagKey =
@@ -659,8 +638,6 @@ inline constexpr const char* PurchaseResponse_items =
     "_ZNK17storeservicescore16PurchaseResponse5itemsEv";
 inline constexpr const char* PurchaseItem_dictionary =
     "_ZNK17storeservicescore12PurchaseItem10dictionaryEv";
-inline constexpr const char* vector_PurchaseItem_dtor =
-    "_ZNSt6__ndk16vectorINS_10shared_ptrIN17storeservicescore12PurchaseItemEEENS_9allocatorIS4_EEED2Ev";
 
 inline constexpr const char* URLRequest_setURLResponsePreprocessor =
     "_ZN17storeservicescore10URLRequest26setURLResponsePreprocessorERKNSt6__ndk18functionIFvRKNS1_10shared_ptrINS_11URLResponseEEEEEE";

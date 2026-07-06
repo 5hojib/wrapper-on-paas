@@ -256,23 +256,13 @@ PlaybackResult fetch_playback_json(const Loader& loader,
     };
 
     // PurchaseRequest is heavy-ish; upstream uses malloc(1024) and never frees.
-    // Keep one 8 KiB thread-local buffer but ensure destruction to avoid leaks.
+    // Keep one 8 KiB thread-local buffer and skip destruction, matching the
+    // upstream lifetime model
     // and alignment.
     alignas(16) static thread_local std::uint8_t pr_buf[8192];
     std::memset(pr_buf, 0, sizeof(pr_buf));
 
     s.PurchaseRequest_ctor(pr_buf, &req_ctx);
-
-    // RAII wrapper to ensure PurchaseRequest is destroyed properly
-    struct PurchaseRequestCleanup {
-        const Symbols& s;
-        void* buf;
-        ~PurchaseRequestCleanup() {
-            if (s.PurchaseRequest_dtor) {
-                s.PurchaseRequest_dtor(buf);
-            }
-        }
-    } pr_cleanup{s, pr_buf};
     std::uint8_t one = 1;
     s.PurchaseRequest_setProcessDialogActions(pr_buf, one);
 
@@ -364,9 +354,10 @@ PlaybackResult fetch_playback_json(const Loader& loader,
             song_list.push_back(cf_to_json(s, item_dict));
         }
 
-        if (s.vector_PurchaseItem_dtor != nullptr) {
-            s.vector_PurchaseItem_dtor(&items);
-        }
+        // Note: we deliberately leak `items` (a std::vector with N shared_ptr
+        // elements). Calling its destructor would require the vector's dtor
+        // symbol; same shortcut upstream wrapper takes with similar return-
+        // by-value results. ~16 bytes per item.
 
         if (!song_list.empty()) {
             out.body = nlohmann::json::object();
