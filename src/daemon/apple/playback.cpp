@@ -329,6 +329,31 @@ PlaybackResult fetch_playback_json(const Loader& loader,
         return out;
     }
 
+    // Fallback: PurchaseResponse::items() deep copies to a C++ std::vector.
+    // Instead of instantiating std::shared_ptrs we leak, check if the raw
+    // response plist is at object offset 0 (as is typical for these wrappers).
+    if (purchase_response_obj != nullptr) {
+        void* raw_cf = *static_cast<void**>(purchase_response_obj);
+        if (raw_cf != nullptr) {
+            unsigned long tid = s.CFGetTypeID(raw_cf);
+            if (tid == s.CFArrayGetTypeID()) {
+                out.body = nlohmann::json::object();
+                out.body["songList"] = cf_to_json(s, raw_cf);
+                out.ok = true;
+                return out;
+            } else if (tid == s.CFDictionaryGetTypeID()) {
+                out.body = cf_to_json(s, raw_cf);
+                if (!out.body.contains("songList")) {
+                    nlohmann::json wrap = nlohmann::json::object();
+                    wrap["songList"] = nlohmann::json::array({ std::move(out.body) });
+                    out.body = std::move(wrap);
+                }
+                out.ok = true;
+                return out;
+            }
+        }
+    }
+
     // Fallback: walk PurchaseResponse::items() and build the JSON document
     // directly (one cf_to_json per item, then wrap in {"songList": [...]}).
     // This is the expected path - PurchaseRequest::run does not fire
