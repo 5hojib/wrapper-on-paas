@@ -172,7 +172,8 @@ void append_u32_be(std::string* out, std::uint32_t v) {
 struct SampleDecryptFrame {
     std::string adam_id;
     std::string uri;
-    std::vector<std::vector<std::uint8_t>> samples;
+    std::vector<std::uint32_t> sample_lengths;
+    const std::uint8_t* samples_data = nullptr;
 };
 
 bool parse_sample_decrypt_frame(const std::string& body,
@@ -244,35 +245,8 @@ bool parse_sample_decrypt_frame(const std::string& body,
     out->uri.assign(p, uri_len);
     p += uri_len;
 
-    out->samples.clear();
-    out->samples.reserve(sample_count);
-    for (std::uint32_t n : lengths) {
-        const auto* b = reinterpret_cast<const std::uint8_t*>(p);
-        out->samples.emplace_back(b, b + n);
-        p += n;
-    }
-    return true;
-}
-
-bool build_sample_decrypt_frame(const std::vector<std::vector<std::uint8_t>>& samples,
-                                std::string* out) {
-    if (samples.size() > 0xffffffffu) return false;
-    std::uint64_t size = 4ull + (static_cast<std::uint64_t>(samples.size()) * 4ull);
-    for (const auto& sample : samples) {
-        if (sample.size() > 0xffffffffu) return false;
-        size += sample.size();
-    }
-    if (size > static_cast<std::uint64_t>(out->max_size())) return false;
-
-    out->clear();
-    out->reserve(static_cast<std::size_t>(size));
-    append_u32_be(out, static_cast<std::uint32_t>(samples.size()));
-    for (const auto& sample : samples) {
-        append_u32_be(out, static_cast<std::uint32_t>(sample.size()));
-    }
-    for (const auto& sample : samples) {
-        out->append(reinterpret_cast<const char*>(sample.data()), sample.size());
-    }
+    out->sample_lengths = std::move(lengths);
+    out->samples_data = reinterpret_cast<const std::uint8_t*>(p);
     return true;
 }
 
@@ -562,13 +536,36 @@ void Server::mount() {
             return;
         }
 
+        std::uint64_t total_sample_bytes = 0;
+        for (std::uint32_t len : frame.sample_lengths) {
+            total_sample_bytes += len;
+        }
+        std::uint64_t response_size = 4ull + (static_cast<std::uint64_t>(frame.sample_lengths.size()) * 4ull) + total_sample_bytes;
+
+        std::string response_body;
+        if (response_size > static_cast<std::uint64_t>(response_body.max_size())) {
+            respond_json(res, 500, json{
+                {"error", "response_too_large"},
+                {"detail", "decrypted sample frame is too large"},
+            });
+            return;
+        }
+
+        response_body.reserve(static_cast<std::size_t>(response_size));
+        append_u32_be(&response_body, static_cast<std::uint32_t>(frame.sample_lengths.size()));
+        for (std::uint32_t len : frame.sample_lengths) {
+            append_u32_be(&response_body, len);
+        }
+        // Resize the string to its full size so we can pass a pointer to its payload section to `decrypt_samples`.
+        response_body.resize(static_cast<std::size_t>(response_size));
+        std::uint8_t* plaintexts = reinterpret_cast<std::uint8_t*>(&response_body[0]) + 4 + (frame.sample_lengths.size() * 4);
+
         auto decrypt_done = start_decrypt_watchdog();
         apple::DecryptResult dr;
-        {
-            std::lock_guard<std::mutex> lock(rt_.playback_mutex());
-            dr = apple::decrypt_samples(loader_, rt_, std::move(frame.adam_id), std::move(frame.uri),
-                                        frame.samples);
-        }
+
+        dr = apple::decrypt_samples(loader_, rt_, std::move(frame.adam_id), std::move(frame.uri),
+                                    frame.sample_lengths, frame.samples_data, plaintexts);
+
         decrypt_done->store(true, std::memory_order_release);
 
         if (!dr.ok) {
@@ -581,14 +578,6 @@ void Server::mount() {
             return;
         }
 
-        std::string response_body;
-        if (!build_sample_decrypt_frame(dr.plaintexts, &response_body)) {
-            respond_json(res, 500, json{
-                {"error", "response_too_large"},
-                {"detail", "decrypted sample frame is too large"},
-            });
-            return;
-        }
         res.status = 200;
         res.set_content(response_body, "application/octet-stream");
     });

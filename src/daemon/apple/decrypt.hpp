@@ -15,7 +15,6 @@ class Runtime;
 struct DecryptResult {
     bool                     ok = false;
     std::string              error;
-    std::vector<std::vector<std::uint8_t>> plaintexts;
 };
 
 // Decrypt one or more ciphertext samples for the same (adam_id, uri) key.
@@ -24,6 +23,8 @@ DecryptResult decrypt_samples(const Loader& loader,
                               Runtime&      runtime,
                               std::string   adam_id,
                               std::string   key_uri,
-                              const std::vector<std::vector<std::uint8_t>>& ciphertexts);
+                              const std::vector<std::uint32_t>& sample_lengths,
+                              const std::uint8_t* ciphertexts_data,
+                              std::uint8_t* plaintexts_data);
 
 }  // namespace wrapper::apple
