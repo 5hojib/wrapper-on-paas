@@ -95,12 +95,8 @@ ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 ENV CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 ENV ANDROID_DNS_MODE=local
 
-# Default port for Render.
-ENV PORT=8080
-EXPOSE 8080
-
 USER wrapper
 WORKDIR /home/wrapper
 
 # Start the daemon via the Android linker.
-ENTRYPOINT ["/usr/local/bin/wrapper-daemon"]
+CMD ["/usr/local/bin/wrapper-daemon"]
