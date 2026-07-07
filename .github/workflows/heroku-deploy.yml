@@ -1,0 +1,46 @@
+name: Deploy to Heroku
+
+on:
+  workflow_dispatch:
+    inputs:
+      HEROKU_APP_NAME:
+        description: "Heroku app name"
+        required: true
+        type: string
+
+      HEROKU_TEAM_NAME:
+        description: "Heroku team name"
+        required: true
+        type: string
+
+      WRAPPER_USERNAME:
+        description: "Wrapper username"
+        required: true
+        type: string
+
+      WRAPPER_PASSWORD:
+        description: "Wrapper password"
+        required: true
+        type: string
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: 5hojib/heroku-deploy-action@v2
+        with:
+          heroku_api_key: ${{ secrets.HEROKU_API_KEY }}
+          heroku_email: ${{ secrets.HEROKU_EMAIL }}
+          heroku_app_name: ${{ inputs.HEROKU_APP_NAME }}
+          team: ${{ inputs.HEROKU_TEAM_NAME }}
+          usedocker: true
+          docker_heroku_process_type: web
+          stack: container
+          region: us
+
+        env:
+          HD_WRAPPER_USERNAME: ${{ inputs.WRAPPER_USERNAME }}
+          HD_WRAPPER_PASSWORD: ${{ inputs.WRAPPER_PASSWORD }}
