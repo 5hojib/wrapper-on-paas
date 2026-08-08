@@ -6,7 +6,7 @@ on:
       APK_URL:
         description: "Apple Music .apkm bundle URL (all splits)"
         required: false
-        default: "https://github.com/5hojib/WealthWise/releases/download/v1/apple-music.apkm"
+        default: "https://github.com/5hojib/wrapper-on-paas/releases/download/v1.0.0/apple-music.apkm"
       TAG:
         description: "Image tag"
         required: false

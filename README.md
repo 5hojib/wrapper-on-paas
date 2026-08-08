@@ -229,7 +229,7 @@ when you bump the Apple Music build or change the C++ daemon:
 # Pulls the pinned .apkm, stages Android system binaries, cross-compiles the
 # daemon with the NDK, and verifies the extracted libraries against
 # LIBS_VERSION.json. All inside the build container; no host toolchain needed.
-docker build -f Dockerfile.base --build-arg APK_URL=https://.../apple-music.apkm \
+docker build -f Dockerfile.base --build-arg APK_URL=https://github.com/5hojib/wrapper-on-paas/releases/download/v1.0.0/apple-music.apkm \
   -t wrapper-base:latest .
 ```
 

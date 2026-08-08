@@ -12,7 +12,7 @@
 # the APK or the NDK.
 
 ARG NDK_VERSION=23
-ARG APK_URL="https://github.com/5hojib/WealthWise/releases/download/v1/apple-music.apkm"
+ARG APK_URL="https://github.com/5hojib/wrapper-on-paas/releases/download/v1.0.0/apple-music.apkm"
 ARG BUILD_PLATFORM=linux/amd64
 
 # -----------------------------------------------------------------------------
