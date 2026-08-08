@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  packages: read
 
 concurrency:
   group: build-${{ github.workflow }}-${{ github.ref }}
@@ -33,15 +34,14 @@ jobs:
       - name: Rust unit tests
         run: cargo test
 
-      - name: Build base image
-        run: |
-          docker build --file Dockerfile.base \
-            -t wrapper-base:${{ github.sha }} .
-
-      - name: Build wrapper image
+      # The immutable base (staged Android system, Apple Music libs, prebuilt
+      # NDK daemon) is published to GHCR by .github/workflows/publish-base.yml.
+      # The wrapper image layers the Rust supervisor on top of that prebuilt
+      # base, so test builds never rebuild it.
+      - name: Build wrapper image (prebuilt GHCR base)
         run: |
           docker build --build-arg BUILD_PLATFORM=linux/amd64 \
-            --build-arg BASE_IMAGE=wrapper-base:${{ github.sha }} \
+            --build-arg BASE_IMAGE=ghcr.io/${{ github.repository }}/wrapper-base:latest \
             -t wrapper-v2:${{ github.sha }} .
 
       - name: Smoke test (rootless HTTP and TCP)

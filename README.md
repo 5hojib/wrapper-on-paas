@@ -304,15 +304,18 @@ The daemon reads `WRAPPER_*` environment variables (forwarded via
 
 The `.github/workflows/build.yml` workflow runs on **push** to `main`,
 on **pull_request**, and on **workflow_dispatch**. It runs `cargo test`,
-validates `compose.yaml`, builds the base image, then the wrapper image on top
-of it, and runs a rootless `/health` + TCP smoke test.
+validates `compose.yaml`, builds the wrapper image on top of the **prebuilt
+GHCR base image** (no base rebuild), and runs a rootless `/health` + TCP smoke
+test.
 
 The single `x86_64` job uses `ubuntu-latest` on **linux/amd64**. The smoke test
 checks that the HTTP `/health` and the TCP decrypt listener accept connections.
 
-The `.github/workflows/publish-base.yml` workflow (manual dispatch) rebuilds and
-pushes the base image to GHCR, taking an optional `APK_URL` input for a new
-Apple Music bundle and a `TAG` for the image tag.
+The `.github/workflows/publish-base.yml` workflow rebuilds and pushes the base
+image to GHCR whenever a base-relevant path changes (`Dockerfile.base`,
+`CMakeLists.txt`, `LIBS_VERSION.json`, `tools/**`, `src/daemon/**`), and is also
+manually dispatchable. It takes an optional `APK_URL` input for a new Apple
+Music bundle and a `TAG` for the image tag.
 
 ## Deploy to PaaS
 

@@ -1,6 +1,15 @@
 name: publish-base
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'Dockerfile.base'
+      - 'CMakeLists.txt'
+      - 'LIBS_VERSION.json'
+      - 'tools/**'
+      - 'src/daemon/**'
+      - '.github/workflows/publish-base.yml'
   workflow_dispatch:
     inputs:
       APK_URL:
@@ -40,7 +49,7 @@ jobs:
           platforms: linux/amd64
           push: true
           build-args: |
-            APK_URL=${{ inputs.APK_URL }}
+            APK_URL=${{ inputs.APK_URL || 'https://github.com/5hojib/wrapper-on-paas/releases/download/v1.0.0/apple-music.apkm' }}
           tags: |
-            ghcr.io/${{ github.repository }}/wrapper-base:${{ inputs.TAG }}
+            ghcr.io/${{ github.repository }}/wrapper-base:${{ inputs.TAG || 'latest' }}
             ghcr.io/${{ github.repository }}/wrapper-base:${{ github.sha }}
