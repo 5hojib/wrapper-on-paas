@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: wealthwise-wrapper
+    runtime: docker
+    plan: free # or your preferred plan
+    region: oregon # or your preferred region
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    envVars:
+      # Single dynamic port: $PORT is injected by Render; disable the extra
+      # raw TCP decrypt listener and use HTTP POST /decrypt instead.
+      - key: WRAPPER_DECRYPT_PORT
+        value: "0"
+      - key: WRAPPER_USERNAME
+        sync: false
+      - key: WRAPPER_PASSWORD
+        sync: false
+    disk:
+      name: wrapper-data
+      mountPath: /data
+      sizeGB: 1

@@ -1,0 +1,76 @@
+# Base image for wrapper-v2.
+#
+# Packages the immutable, arch-specific files that every wrapper build needs:
+#   - the staged Android system binaries (linker64 + bionic + AOSP libs)
+#   - Apple Music's native libraries (extracted + hash-verified from the APK)
+#   - the prebuilt NDK daemon (main)
+#   - zoneinfo + the CA bundle
+#
+# This image is built once on amd64 CI (.github/workflows/publish-base.yml) and
+# pushed to a registry (default: ghcr.io/<repo>/wrapper-base). The wrapper
+# Dockerfile copies /rootfs from it, so building the wrapper never downloads
+# the APK or the NDK.
+
+ARG NDK_VERSION=23
+ARG APK_URL="https://github.com/5hojib/WealthWise/releases/download/v1/apple-music.apkm"
+ARG BUILD_PLATFORM=linux/amd64
+
+# -----------------------------------------------------------------------------
+# Build stage: assemble rootfs/ (needs the NDK + the APK)
+# -----------------------------------------------------------------------------
+FROM --platform=${BUILD_PLATFORM} debian:13.2 AS build
+
+# Re-declare the global ARGs so their values are in scope inside this stage.
+ARG NDK_VERSION
+ARG APK_URL
+
+SHELL ["/bin/bash", "-c"]
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        cmake \
+        curl \
+        git \
+        jq \
+        ninja-build \
+        unzip \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl -fSL -o /tmp/ndk.zip \
+        "https://dl.google.com/android/repository/android-ndk-r${NDK_VERSION}b-linux.zip" && \
+    unzip -q /tmp/ndk.zip -d /opt && \
+    rm /tmp/ndk.zip
+ENV ANDROID_NDK_HOME=/opt/android-ndk-r${NDK_VERSION}b
+
+WORKDIR /src
+COPY . /src
+
+# Fetch the Android system binaries (SHA-verified against LIBS_VERSION.json),
+# stage them, then extract Apple Music native libs (also hash-verified).
+RUN bash tools/fetch-android-system.sh --arch x86_64 && \
+    bash tools/stage-system.sh --arch x86_64 && \
+    curl -fSL --retry 3 -o /tmp/apple-music.apkm "$APK_URL" && \
+    bash tools/extract-libs.sh --bundle /tmp/apple-music.apkm --arch x86_64 && \
+    rm /tmp/apple-music.apkm
+
+# Cross-compile the daemon with the NDK; the top-level cmake target stages it
+# into rootfs/system/bin/main.
+RUN cmake -S . -B build -G Ninja -DTARGET_ARCH=x86_64 && \
+    cmake --build build -j
+
+# CA bundle for Apple's libcurl inside the chroot.
+RUN mkdir -p /rootfs/etc/ssl/certs && \
+    cp /etc/ssl/certs/ca-certificates.crt /rootfs/etc/ssl/certs/ca-certificates.crt && \
+    cp -a /src/rootfs/. /rootfs
+
+# -----------------------------------------------------------------------------
+# Final image: debian + the fully staged rootfs
+# -----------------------------------------------------------------------------
+FROM --platform=${BUILD_PLATFORM} debian:13.2
+
+COPY --from=build /rootfs /rootfs
+
+LABEL org.opencontainers.image.source="https://github.com/5hojib/wrapper-on-paas"
+LABEL org.opencontainers.image.description="wrapper-v2 immutable base: staged Android system, Apple Music libs, prebuilt daemon"

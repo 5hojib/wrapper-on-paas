@@ -1,0 +1,112 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build (x86_64)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install host tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            jq curl ca-certificates
+
+      - name: Validate Compose config
+        run: docker compose config --quiet
+
+      - name: Rust unit tests
+        run: cargo test
+
+      - name: Build base image
+        run: |
+          docker build --file Dockerfile.base \
+            -t wrapper-base:${{ github.sha }} .
+
+      - name: Build wrapper image
+        run: |
+          docker build --build-arg BUILD_PLATFORM=linux/amd64 \
+            --build-arg BASE_IMAGE=wrapper-base:${{ github.sha }} \
+            -t wrapper-v2:${{ github.sha }} .
+
+      - name: Smoke test (rootless HTTP and TCP)
+        run: |
+          # No --rm: if the app exits immediately, Docker removes --rm containers
+          # and a later docker stop hits "No such container".
+          docker rm -f wrapper-smoke 2>/dev/null || true
+          # The image runs as an unprivileged user (rootless mode) - the same
+          # path Heroku/Render use. No capabilities are required.
+          docker run -d \
+            --name wrapper-smoke \
+            -p 8080:8080 \
+            -p 11020:10020 \
+            wrapper-v2:${{ github.sha }}
+          http_ok=0
+          for i in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:8080/health >/dev/null; then
+              echo "health OK after ${i} attempt(s)"
+              http_ok=1
+              break
+            fi
+            sleep 1
+          done
+          if [[ "$http_ok" != "1" ]]; then
+            echo "::error::health did not become ready in time"
+            docker logs wrapper-smoke 2>&1 || true
+            docker rm -f wrapper-smoke 2>/dev/null || true
+            exit 1
+          fi
+          curl -sf http://127.0.0.1:8080/health | jq .
+
+          # Plain /health is 200 even when the Android worker is dead (the
+          # supervisor serves it without the worker). Verify the worker is
+          # actually up via the deep IPC probe before calling the smoke green.
+          deep_ok=0
+          for i in $(seq 1 30); do
+            if curl -sf "http://127.0.0.1:8080/health?deep=1" \
+                | jq -e '.worker_ipc.reachable == true' >/dev/null 2>&1; then
+              echo "worker IPC reachable after ${i} attempt(s)"
+              deep_ok=1
+              break
+            fi
+            sleep 1
+          done
+          if [[ "$deep_ok" != "1" ]]; then
+            echo "::error::worker did not become reachable (Android worker failed to start)"
+            docker logs wrapper-smoke 2>&1 || true
+            docker rm -f wrapper-smoke 2>/dev/null || true
+            exit 1
+          fi
+          curl -sf "http://127.0.0.1:8080/health?deep=1" | jq .
+
+          tcp_ok=0
+          for i in $(seq 1 30); do
+            if timeout 2 bash -c '</dev/tcp/127.0.0.1/11020' 2>/dev/null; then
+              echo "TCP decrypt listener OK after ${i} attempt(s)"
+              tcp_ok=1
+              break
+            fi
+            sleep 1
+          done
+          if [[ "$tcp_ok" != "1" ]]; then
+            echo "::error::TCP decrypt listener did not accept connections in time"
+            docker logs wrapper-smoke 2>&1 || true
+            docker rm -f wrapper-smoke 2>/dev/null || true
+            exit 1
+          fi
+          docker rm -f wrapper-smoke

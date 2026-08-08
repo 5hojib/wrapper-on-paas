@@ -1,0 +1,14 @@
+/target/
+
+# Runtime/session data mounted by compose.yaml.
+/data/
+
+# rootfs/ is entirely assembled inside the base-image build (Dockerfile.base);
+# nothing under it is committed or needs placeholder files.
+/rootfs/
+
+# Android system binaries fetched by tools/fetch-android-system.sh from the
+# pinned upstream commit (SHA-verified against LIBS_VERSION.json). Nothing
+# under the per-arch dirs is committed.
+/vendor/android-system/*/
+/build/

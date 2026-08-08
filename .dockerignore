@@ -1,0 +1,26 @@
+.git/
+.github/
+.tmp/
+.cache/
+build/
+build-*/
+cmake-build-*/
+data/
+
+*.apk
+*.apkm
+*.md
+!README.md
+
+# rootfs/ is assembled inside the base image build, never copied from a
+# developer checkout.
+rootfs/
+
+# Android system binaries are fetched inside the base image build
+# (tools/fetch-android-system.sh), never copied from a developer checkout.
+vendor/android-system/*/
+
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

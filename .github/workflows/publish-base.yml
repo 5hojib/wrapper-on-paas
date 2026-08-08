@@ -1,0 +1,46 @@
+name: publish-base
+
+on:
+  workflow_dispatch:
+    inputs:
+      APK_URL:
+        description: "Apple Music .apkm bundle URL (all splits)"
+        required: false
+        default: "https://github.com/5hojib/WealthWise/releases/download/v1/apple-music.apkm"
+      TAG:
+        description: "Image tag"
+        required: false
+        default: "latest"
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push base image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.base
+          platforms: linux/amd64
+          push: true
+          build-args: |
+            APK_URL=${{ inputs.APK_URL }}
+          tags: |
+            ghcr.io/${{ github.repository }}/wrapper-base:${{ inputs.TAG }}
+            ghcr.io/${{ github.repository }}/wrapper-base:${{ github.sha }}
