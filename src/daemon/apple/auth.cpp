@@ -109,7 +109,17 @@ bool Account::submit_2fa(std::string code) {
 }
 
 bool Account::try_restore_cached_session(const Loader& loader, const Runtime& runtime) {
-    std::lock_guard<std::mutex> restore_guard(restore_mu_);
+    // Non-blocking gate: a restore already in progress (e.g. the background
+    // restore thread spawned at startup) may be stuck inside an unbounded
+    // Apple network call (dev token / music token harvest). Never stall the
+    // calling thread (the IPC dispatch thread) on that mutex: return false so
+    // the caller fails fast (401) instead of hanging the whole worker.
+    std::unique_lock<std::mutex> restore_guard(restore_mu_, std::try_to_lock);
+    if (!restore_guard.owns_lock()) {
+        std::fprintf(stderr,
+                     "auth: cached-session restore already in progress; skipping\n");
+        return false;
+    }
 
     if (!loader.ok() || !runtime.initialized()) {
         return false;

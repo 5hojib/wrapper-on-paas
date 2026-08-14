@@ -45,10 +45,16 @@ pub struct Worker {
     launcher: String,
     version: String,
     request_timeout: Duration,
+    startup_timeout: Duration,
+    busy_timeout: Duration,
+    max_waiters: u32,
+    max_startup_failures: u32,
+    exit_on_startup_failure: bool,
     next_id: AtomicU32,
     restart_count: AtomicU32,
     timeout_count: AtomicU32,
     waiting_count: AtomicU32,
+    startup_failures: AtomicU32,
     pid: AtomicU32,
     proc: Mutex<Option<WorkerProcess>>,
     state: Mutex<WorkerState>,
@@ -82,10 +88,16 @@ impl Worker {
             launcher: launcher.to_string(),
             version,
             request_timeout: worker_timeout(),
+            startup_timeout: worker_startup_timeout(),
+            busy_timeout: worker_busy_timeout(),
+            max_waiters: worker_max_waiters(),
+            max_startup_failures: worker_max_startup_failures(),
+            exit_on_startup_failure: worker_exit_on_startup_failure(),
             next_id: AtomicU32::new(1),
             restart_count: AtomicU32::new(0),
             timeout_count: AtomicU32::new(0),
             waiting_count: AtomicU32::new(0),
+            startup_failures: AtomicU32::new(0),
             pid: AtomicU32::new(0),
             proc: Mutex::new(None),
             state: Mutex::new(WorkerState {
@@ -107,7 +119,7 @@ impl Worker {
             }
             self.pid.store(0, Ordering::Relaxed);
         }
-        *guard = Some(self.spawn()?);
+        *guard = Some(self.spawn_ready()?);
         Ok(())
     }
 
@@ -129,9 +141,14 @@ impl Worker {
         json!({
             "pid": pid,
             "request_timeout_secs": self.request_timeout.as_secs(),
+            "startup_timeout_secs": self.startup_timeout.as_secs(),
+            "busy_timeout_ms": self.busy_timeout.as_millis(),
+            "max_waiters": self.max_waiters,
+            "max_restarts": self.max_startup_failures,
             "restart_count": self.restart_count.load(Ordering::Relaxed),
             "timeout_count": self.timeout_count.load(Ordering::Relaxed),
             "waiting_count": self.waiting_count.load(Ordering::Relaxed),
+            "startup_failures": self.startup_failures.load(Ordering::Relaxed),
             "current_request": current.map(|r| json!({
                 "id": r.id,
                 "opcode": r.opcode,
@@ -176,15 +193,30 @@ impl Worker {
 
     fn request(&self, opcode: u16, payload: Vec<u8>) -> Result<protocol::Frame, WorkerError> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        let deadline = Instant::now() + self.request_timeout;
+        let request_deadline = Instant::now() + self.request_timeout;
+
+        // Admission control: too many threads already queued behind the single
+        // worker means the worker is likely stuck. Fail fast instead of
+        // letting the queue grow past the platform's connection timeout.
+        if self.waiting_count.load(Ordering::Relaxed) >= self.max_waiters {
+            return Err(WorkerError::Unavailable(format!(
+                "worker busy: {} requests already waiting",
+                self.waiting_count.load(Ordering::Relaxed)
+            )));
+        }
+
         let wait_tracker = self.track_wait();
-        let mut guard = match lock_worker_timeout(&self.proc, deadline) {
+        // Do not let lock contention eat the whole request budget: waiting
+        // behind a stuck request past the busy timeout just wastes the
+        // client's connection (Heroku kills at 30s regardless).
+        let lock_deadline = Instant::now() + self.busy_timeout;
+        let mut guard = match lock_worker_timeout(&self.proc, lock_deadline) {
             Ok(g) => g,
             Err(e) => {
                 if e.to_string().contains("timed out") {
                     eprintln!(
                         "wrapper: worker request opcode={opcode} timed out waiting for worker after {:?}",
-                        self.request_timeout
+                        self.busy_timeout
                     );
                     self.timeout_count.fetch_add(1, Ordering::Relaxed);
                     self.recover_stuck_worker_or_exit("lock wait timeout");
@@ -196,13 +228,13 @@ impl Worker {
         drop(wait_tracker);
         let _tracker = self.track_request(id, opcode);
         if guard.is_none() {
-            *guard = Some(self.spawn()?);
+            *guard = Some(self.spawn_ready()?);
         }
         let proc = guard
             .as_mut()
             .ok_or_else(|| WorkerError::Unavailable("worker missing".to_string()))?;
         if proc.child.try_wait().map_err(io_err)?.is_some() {
-            *guard = Some(self.spawn()?);
+            *guard = Some(self.spawn_ready()?);
         }
         let proc = guard
             .as_mut()
@@ -214,7 +246,7 @@ impl Worker {
             flags: 0,
             payload,
         };
-        if let Err(e) = write_frame_timeout(&mut proc.stdin, &req, deadline) {
+        if let Err(e) = write_frame_timeout(&mut proc.stdin, &req, request_deadline) {
             if e.kind() == io::ErrorKind::TimedOut {
                 eprintln!(
                     "wrapper: worker request opcode={opcode} timed out while writing after {:?}; restarting worker",
@@ -228,7 +260,7 @@ impl Worker {
             self.record_error(e.to_string());
             return Err(WorkerError::Io(e.to_string()));
         }
-        let resp = match read_frame_timeout(&mut proc.stdout, deadline) {
+        let resp = match read_frame_timeout(&mut proc.stdout, request_deadline) {
             Ok(frame) => frame,
             Err(e) => {
                 if e.kind() == io::ErrorKind::TimedOut {
@@ -250,6 +282,7 @@ impl Worker {
             self.record_error("mismatched ipc response");
             return Err(WorkerError::Protocol("mismatched ipc response".to_string()));
         }
+        self.startup_failures.store(0, Ordering::Relaxed);
         Ok(resp)
     }
 
@@ -265,16 +298,30 @@ impl Worker {
             .stderr(Stdio::inherit())
             .spawn()
             .map_err(io_err)?;
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| WorkerError::Io("worker stdin unavailable".to_string()))?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| WorkerError::Io("worker stdout unavailable".to_string()))?;
-        set_nonblocking(&stdin)?;
-        set_nonblocking(&stdout)?;
+        let stdin = match child.stdin.take() {
+            Some(s) => s,
+            None => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(WorkerError::Io("worker stdin unavailable".to_string()));
+            }
+        };
+        let stdout = match child.stdout.take() {
+            Some(s) => s,
+            None => {
+                drop(stdin);
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(WorkerError::Io("worker stdout unavailable".to_string()));
+            }
+        };
+        if let Err(e) = set_nonblocking(&stdin).and_then(|_| set_nonblocking(&stdout)) {
+            drop(stdin);
+            drop(stdout);
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(e);
+        }
         self.pid.store(child.id(), Ordering::Relaxed);
         let _ = &self.version;
         Ok(WorkerProcess {
@@ -282,6 +329,86 @@ impl Worker {
             stdin,
             stdout,
         })
+    }
+
+    // Spawn a worker and prove it is actually responsive before handing it
+    // to a caller. A worker that hangs during Apple-lib init (startup lease,
+    // session restore) never enters its IPC read loop; without this check a
+    // wedged worker would sit in the proc slot eating a full request timeout
+    // on every request. On probe failure the worker is killed and respawned
+    // up to max_startup_failures times, then the supervisor exits so the PaaS
+    // platform restarts the dyno cleanly.
+    fn spawn_ready(&self) -> Result<WorkerProcess, WorkerError> {
+        let attempts = self.max_startup_failures.max(1);
+        for attempt in 1..=attempts {
+            let mut proc = match self.spawn() {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!(
+                        "wrapper: worker spawn failed (attempt {attempt}/{attempts}): {e}"
+                    );
+                    self.note_startup_failure();
+                    if attempt < attempts {
+                        thread::sleep(Duration::from_secs(1));
+                    }
+                    continue;
+                }
+            };
+            match self.probe_ready(&mut proc) {
+                Ok(()) => {
+                    eprintln!("wrapper: ipc worker ready (pid={})", proc.child.id());
+                    self.startup_failures.store(0, Ordering::Relaxed);
+                    return Ok(proc);
+                }
+                Err(e) => {
+                    eprintln!(
+                        "wrapper: worker startup probe failed (attempt {attempt}/{attempts}): {e}"
+                    );
+                    self.pid.store(0, Ordering::Relaxed);
+                    cleanup_worker(Some(proc), "startup probe failed");
+                    self.note_startup_failure();
+                    if attempt < attempts {
+                        thread::sleep(Duration::from_secs(1));
+                    }
+                }
+            }
+        }
+        Err(WorkerError::Unavailable(format!(
+            "worker failed to become ready after {attempts} attempts"
+        )))
+    }
+
+    fn note_startup_failure(&self) {
+        let failures = self.startup_failures.fetch_add(1, Ordering::Relaxed) + 1;
+        if self.exit_on_startup_failure && failures >= self.max_startup_failures.max(1) {
+            eprintln!(
+                "wrapper: fatal: worker failed to start {failures} consecutive times; exiting for container restart"
+            );
+            std::process::exit(70);
+        }
+    }
+
+    // Send an OP_HEALTH frame and require a well-formed response within
+    // startup_timeout. Any other outcome means the worker is not usable.
+    fn probe_ready(&self, proc: &mut WorkerProcess) -> Result<(), WorkerError> {
+        let deadline = Instant::now() + self.startup_timeout;
+        let req = protocol::Frame {
+            kind: protocol::KIND_REQUEST,
+            request_id: 0,
+            opcode: protocol::OP_HEALTH,
+            flags: 0,
+            payload: Vec::new(),
+        };
+        write_frame_timeout(&mut proc.stdin, &req, deadline)
+            .map_err(|e| WorkerError::Io(e.to_string()))?;
+        let resp = read_frame_timeout(&mut proc.stdout, deadline)
+            .map_err(|e| WorkerError::Io(e.to_string()))?;
+        if resp.kind != protocol::KIND_RESPONSE || resp.opcode != protocol::OP_HEALTH {
+            return Err(WorkerError::Protocol(
+                "worker returned a non-health frame during startup probe".to_string(),
+            ));
+        }
+        Ok(())
     }
 
     fn restart_after_delay(&self) {
@@ -303,7 +430,7 @@ impl Worker {
         if guard.is_some() {
             return;
         }
-        match self.spawn() {
+        match self.spawn_ready() {
             Ok(p) => *guard = Some(p),
             Err(e) => eprintln!("wrapper: worker restart failed: {e}"),
         }
@@ -413,6 +540,61 @@ fn worker_timeout() -> Duration {
         .filter(|v| *v > 0)
         .map(Duration::from_secs)
         .unwrap_or_else(|| Duration::from_secs(60))
+}
+
+// How long to wait for a freshly-spawned worker to answer the OP_HEALTH
+// readiness probe. A worker that hangs during Apple-lib init (e.g. the
+// startup lease/restore network calls) never reaches its IPC read loop, so
+// without this probe a wedged worker would eat a full request timeout before
+// being discarded.
+fn worker_startup_timeout() -> Duration {
+    std::env::var("WRAPPER_WORKER_STARTUP_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|v| *v > 0)
+        .map(Duration::from_secs)
+        .unwrap_or_else(|| Duration::from_secs(30))
+}
+
+// Cap on how long a request will wait for the single worker mutex while
+// another request is in flight. On PaaS the platform router kills connections
+// long before the request timeout (Heroku H12 at 30s), so queueing every
+// waiting request behind a stuck one just burns time; fail fast with 503
+// instead so clients can retry.
+fn worker_busy_timeout() -> Duration {
+    std::env::var("WRAPPER_WORKER_BUSY_TIMEOUT_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|v| *v > 0)
+        .map(Duration::from_millis)
+        .unwrap_or_else(|| Duration::from_secs(10))
+}
+
+// Maximum number of requests queued behind the current one before new
+// requests fail immediately with "worker busy".
+fn worker_max_waiters() -> u32 {
+    std::env::var("WRAPPER_WORKER_MAX_WAITERS")
+        .ok()
+        .and_then(|v| v.parse::<u32>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(16)
+}
+
+// Consecutive failed worker startups (spawn error or readiness probe
+// timeout) before the supervisor gives up and exits so the PaaS platform
+// restarts the dyno cleanly. Set WRAPPER_EXIT_ON_STARTUP_FAILURE=0 to keep
+// serving 503s instead of exiting.
+fn worker_max_startup_failures() -> u32 {
+    std::env::var("WRAPPER_WORKER_MAX_RESTARTS")
+        .ok()
+        .and_then(|v| v.parse::<u32>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(3)
+}
+
+fn worker_exit_on_startup_failure() -> bool {
+    let v = std::env::var("WRAPPER_EXIT_ON_STARTUP_FAILURE").unwrap_or_default();
+    !matches!(v.trim(), "" | "0" | "false" | "no")
 }
 
 // Rootless worker setup (replaces the former C launcher). The daemon at
@@ -662,4 +844,199 @@ fn parse_worker_response(frame: protocol::Frame) -> Result<WorkerResponse, Worke
         body,
         restart_worker,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+    use std::sync::{Arc, OnceLock};
+
+    // Fake worker that speaks the WV2I IPC protocol over stdin/stdout.
+    // Modes:
+    //   healthy - answers OP_HEALTH and every other request immediately
+    //   slow    - answers the probe, then sleeps before answering work
+    //   wedged  - never reads stdin, simulating a worker stuck during
+    //             Apple-lib init before it reaches the IPC read loop
+    const WORKER_SCRIPT: &str = r#"#!/usr/bin/env python3
+import os, struct, sys, time
+
+MAGIC = 0x57563249
+VERSION = 1
+KIND_RESPONSE = 2
+OP_HEALTH = 1
+
+def read_exact(f, n):
+    buf = b""
+    while len(buf) < n:
+        chunk = f.read(n - len(buf))
+        if not chunk:
+            raise EOFError
+        buf += chunk
+    return buf
+
+def read_frame():
+    h = read_exact(sys.stdin.buffer, 20)
+    _magic, _ver, _kind, request_id, opcode, _flags, plen = struct.unpack(">IHHIHHI", h)
+    payload = read_exact(sys.stdin.buffer, plen) if plen else b""
+    return request_id, opcode, payload
+
+def write_frame(request_id, opcode, payload=b""):
+    sys.stdout.buffer.write(struct.pack(">IHHIHHI", MAGIC, VERSION, KIND_RESPONSE, request_id, opcode, 0, len(payload)))
+    sys.stdout.buffer.write(payload)
+    sys.stdout.buffer.flush()
+
+mode = "MODE_PLACEHOLDER"
+if mode == "wedged":
+    time.sleep(3600)
+
+while True:
+    try:
+        request_id, opcode, payload = read_frame()
+    except EOFError:
+        break
+    if opcode == OP_HEALTH:
+        write_frame(request_id, opcode, b'{"http_status":200,"content_type":"application/json","body":""}')
+    elif mode == "slow":
+        time.sleep(30)
+        write_frame(request_id, opcode, b'{"http_status":200,"content_type":"application/json","body":""}')
+    else:
+        write_frame(request_id, opcode, b'{"http_status":200,"content_type":"application/json","body":""}')
+"#;
+
+    static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    // env manipulation is process-global, so serialize tests that touch it
+    // and restore the previous values afterwards.
+    fn with_env<K: AsRef<str>, V: AsRef<str>>(vars: &[(K, V)], body: impl FnOnce()) {
+        let _guard = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        let saved: Vec<(String, Option<String>)> = vars
+            .iter()
+            .map(|(k, _)| (k.as_ref().to_string(), std::env::var(k.as_ref()).ok()))
+            .collect();
+        for (k, v) in vars {
+            std::env::set_var(k.as_ref(), v.as_ref());
+        }
+        body();
+        for (k, old) in saved {
+            match old {
+                Some(v) => std::env::set_var(k, v),
+                None => std::env::remove_var(k),
+            }
+        }
+    }
+
+    fn write_worker_script(mode: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join("wrapper-worker-tests");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("worker-{mode}.py"));
+        if path.exists() {
+            return path;
+        }
+        std::fs::write(&path, WORKER_SCRIPT.replace("MODE_PLACEHOLDER", mode)).unwrap();
+        let mut perms = std::fs::metadata(&path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&path, perms).unwrap();
+        path
+    }
+
+    fn make_worker(mode: &str) -> Worker {
+        Worker::new(write_worker_script(mode).to_str().unwrap(), "test".into())
+    }
+
+    fn base_env<'a>() -> Vec<(&'a str, String)> {
+        vec![
+            ("WRAPPER_BASE_DIR", std::env::temp_dir().to_string_lossy().into_owned()),
+            ("WRAPPER_EXIT_ON_STARTUP_FAILURE", "0".into()),
+        ]
+    }
+
+    #[test]
+    fn healthy_worker_passes_probe_and_serves_health() {
+        let env = base_env();
+        let mut vars: Vec<(&str, String)> = vec![
+            ("WRAPPER_WORKER_STARTUP_TIMEOUT_SECS", "5".into()),
+            ("WRAPPER_WORKER_BUSY_TIMEOUT_MS", "500".into()),
+            ("WRAPPER_WORKER_MAX_RESTARTS", "2".into()),
+            ("WRAPPER_WORKER_TIMEOUT_SECS", "5".into()),
+        ];
+        vars.extend(env);
+        let refs: Vec<(&str, &str)> = vars.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        with_env(&refs, || {
+            let w = make_worker("healthy");
+            w.ensure_started().expect("worker should become ready");
+            let h = w.health().expect("health should succeed");
+            assert_eq!(h.http_status, 200);
+            let snap = w.snapshot();
+            assert!(snap["pid"].as_u64().unwrap() > 0);
+            assert_eq!(snap["startup_failures"].as_u64().unwrap(), 0);
+        });
+    }
+
+    #[test]
+    fn wedged_worker_fails_probe_within_startup_timeout() {
+        let env = base_env();
+        let mut vars: Vec<(&str, String)> = vec![
+            ("WRAPPER_WORKER_STARTUP_TIMEOUT_SECS", "1".into()),
+            ("WRAPPER_WORKER_BUSY_TIMEOUT_MS", "500".into()),
+            ("WRAPPER_WORKER_MAX_RESTARTS", "2".into()),
+            ("WRAPPER_WORKER_TIMEOUT_SECS", "10".into()),
+        ];
+        vars.extend(env);
+        let refs: Vec<(&str, &str)> = vars.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        with_env(&refs, || {
+            let w = make_worker("wedged");
+            let start = Instant::now();
+            let err = w.ensure_started().unwrap_err();
+            assert!(
+                err.to_string().contains("failed to become ready"),
+                "unexpected error: {err}"
+            );
+            assert!(
+                start.elapsed() < Duration::from_secs(8),
+                "probe failure took too long: {:?}",
+                start.elapsed()
+            );
+            assert_eq!(w.snapshot()["startup_failures"].as_u64().unwrap(), 2);
+            // give the async worker-cleanup threads a moment to land
+            thread::sleep(Duration::from_millis(300));
+        });
+    }
+
+    #[test]
+    fn busy_worker_fails_fast_instead_of_waiting_full_timeout() {
+        let env = base_env();
+        let mut vars: Vec<(&str, String)> = vec![
+            ("WRAPPER_WORKER_STARTUP_TIMEOUT_SECS", "5".into()),
+            ("WRAPPER_WORKER_BUSY_TIMEOUT_MS", "300".into()),
+            ("WRAPPER_WORKER_MAX_RESTARTS", "2".into()),
+            ("WRAPPER_WORKER_TIMEOUT_SECS", "3".into()),
+        ];
+        vars.extend(env);
+        let refs: Vec<(&str, &str)> = vars.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        with_env(&refs, || {
+            let w = Arc::new(make_worker("slow"));
+            w.ensure_started().expect("worker should become ready");
+            let first = Arc::clone(&w);
+            let first_thread = thread::spawn(move || {
+                let _ = first.request(protocol::OP_PLAYBACK, Vec::new());
+            });
+            // let the first request claim the worker before the second arrives
+            thread::sleep(Duration::from_millis(200));
+            let start = Instant::now();
+            let err = w.request(protocol::OP_PLAYBACK, Vec::new()).unwrap_err();
+            let elapsed = start.elapsed();
+            first_thread.join().unwrap();
+            assert!(
+                err.to_string().contains("worker busy timed out"),
+                "unexpected error: {err}"
+            );
+            assert!(
+                elapsed < Duration::from_millis(2500),
+                "second request waited too long: {elapsed:?}"
+            );
+            // give the async worker-cleanup threads a moment to land
+            thread::sleep(Duration::from_millis(300));
+        });
+    }
 }

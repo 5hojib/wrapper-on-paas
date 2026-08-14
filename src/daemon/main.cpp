@@ -40,6 +40,7 @@
 #include <cstring>
 #include <string>
 #include <string_view>
+#include <thread>
 
 #include <signal.h>
 #include <ucontext.h>
@@ -235,19 +236,8 @@ int main(int argc, char** argv) {
             rcfg.base_dir    = env_or("WRAPPER_BASE_DIR",    rcfg.base_dir);
             rcfg.device_info = env_or("WRAPPER_DEVICE_INFO", rcfg.device_info);
             if (runtime.initialize(loader, rcfg)) {
-                if (env_bool("WRAPPER_RESTORE_SESSION", true)) {
-                    const bool restored =
-                        account.try_restore_cached_session(loader, runtime);
-                    if (restored) {
-                        std::fprintf(stderr,
-                                     "wrapper-v2: session restored from Apple cache "
-                                     "(GET /me without POST /login)\n");
-                    }
-                } else {
-                    std::fprintf(stderr,
-                                 "wrapper-v2: WRAPPER_RESTORE_SESSION=0, skipping "
-                                 "cached session probe\n");
-                }
+                // Session restore is deferred to a background thread below so
+                // the Apple-lib init and IPC read loop are not gated on it.
             } else {
                 std::fprintf(stderr,
                              "wrapper-v2: Apple runtime init failed after dlopen "
@@ -269,6 +259,43 @@ int main(int argc, char** argv) {
     }
 
     maybe_auto_login_from_env(account, loader, runtime, info.apple_init_enabled);
+
+    // Restore an on-disk Apple session (if any) on a background thread.
+    // try_restore_cached_session() harvests tokens via unbounded Apple network
+    // calls (dev token + music token). If Apple is slow or unreachable that
+    // call can hang indefinitely; running it synchronously here would keep the
+    // worker from ever entering its IPC read loop and wedge every request.
+    // Running it off-thread lets the worker become responsive immediately: the
+    // first /me or /playback performs the same lazy restore anyway (and skips
+    // quickly if this restore is still in flight - see Account::restore_mu_).
+    // A hung restore only degrades auth to fast 401s, never to hangs.
+    if (info.apple_init_enabled && runtime.initialized()) {
+        if (env_bool("WRAPPER_RESTORE_SESSION", true)) {
+            if (account.state() == wrapper::apple::LoginState::LoggedOut) {
+                std::fprintf(stderr,
+                             "wrapper-v2: restoring cached Apple session in the "
+                             "background\n");
+                std::thread restore_thread([&account, &loader, &runtime]() {
+                    const bool restored =
+                        account.try_restore_cached_session(loader, runtime);
+                    if (restored) {
+                        std::fprintf(stderr,
+                                     "wrapper-v2: session restored from Apple cache "
+                                     "(GET /me without POST /login)\n");
+                    }
+                });
+                restore_thread.detach();
+            } else {
+                std::fprintf(stderr,
+                             "wrapper-v2: auto-login in progress; skipping cached "
+                             "session restore\n");
+            }
+        } else {
+            std::fprintf(stderr,
+                         "wrapper-v2: WRAPPER_RESTORE_SESSION=0, skipping cached "
+                         "session probe\n");
+        }
+    }
 
     return wrapper::run_ipc_worker(runtime, loader, account, info);
 }

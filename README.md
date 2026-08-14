@@ -284,6 +284,32 @@ The daemon reads `WRAPPER_*` environment variables (forwarded via
   the Rust supervisor sets `ipc-worker` automatically.
 - `WRAPPER_WORKER_TIMEOUT_SECS` - timeout for one IPC request to the C++
   Apple worker. Default is `60`.
+- `WRAPPER_WORKER_STARTUP_TIMEOUT_SECS` - how long the supervisor waits for a
+  freshly-spawned worker to answer a readiness (`OP_HEALTH`) probe before
+  discarding it and respawning. This catches workers stuck during Apple-lib
+  init (e.g. a hung startup lease/session-restore network call) before they
+  can eat a full request timeout. Default is `30`.
+- `WRAPPER_WORKER_BUSY_TIMEOUT_MS` - how long a request will queue behind an
+  in-flight request on the single worker before failing fast with `503`.
+  Default is `10000`. Keep it well below the platform's connection timeout
+  (Heroku H12 kills at 30s) so queued requests do not pile up.
+- `WRAPPER_WORKER_MAX_WAITERS` - maximum requests queued behind the current
+  one; beyond this, new requests fail immediately with "worker busy".
+  Default is `16`.
+- `WRAPPER_WORKER_MAX_RESTARTS` - consecutive worker startup failures (spawn
+  error or readiness-probe timeout) before the supervisor gives up. Default
+  is `3`.
+- `WRAPPER_EXIT_ON_STARTUP_FAILURE` - set to `0` to keep serving `503`s
+  instead of exiting the process after `WRAPPER_WORKER_MAX_RESTARTS`
+  consecutive startup failures. Default is `1` (exit, so the PaaS platform
+  restarts the dyno cleanly).
+
+Apple's native libraries make unbounded synchronous network calls (startup
+lease, token harvest, session restore) with no internal timeout. The
+supervisor treats the worker as a black box: it probes each spawn, bounds
+queueing, and — if a worker can never become ready — exits so the platform
+restarts the whole process. Session restore itself runs on a background thread
+in the worker, so a wedged Apple network call no longer blocks the IPC loop.
 - `WRAPPER_BASE_DIR` - filesystem dir Apple's libs use for the FPS
   key cache and `mpl_db`. The default matches upstream wrapper.
 - `WRAPPER_RESTORE_SESSION` - set to `0` to skip startup token harvest from
