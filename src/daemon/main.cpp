@@ -228,73 +228,77 @@ int main(int argc, char** argv) {
 
     std::string libs_dir = env_or("WRAPPER_LIBS_DIR", "/system/lib64");
 
+    // Deferred Apple init. Everything Apple-backed (dlopen, runtime init
+    // including the unbounded SVPlaybackLeaseManager requestLease network
+    // call, env auto-login, session restore) runs on a background thread so
+    // the IPC read loop starts immediately. The Rust supervisor probes
+    // OP_HEALTH on every spawn; a worker gated behind Apple's network would
+    // fail that probe (and be killed/respawned) whenever Apple is slow, which
+    // kills workers before a slow-but-healthy init can finish. Deferring init
+    // means health responds instantly, init completes in its own time, and a
+    // genuinely unreachable Apple degrades Apple-backed requests to fast 503s
+    // instead of hangs or crash loops.
     if (info.apple_init_enabled) {
-        std::fprintf(stderr, "wrapper-v2: opening Apple libs from %s\n",
-                     libs_dir.c_str());
-        if (loader.open(libs_dir)) {
+        std::thread init_thread([info, libs_dir, &account, &loader, &runtime]() {
+            std::fprintf(stderr,
+                         "wrapper-v2: opening Apple libs from %s on background "
+                         "thread\n",
+                         libs_dir.c_str());
+            if (!loader.open(libs_dir)) {
+                std::fprintf(stderr,
+                             "wrapper-v2: Apple lib load failed (libs_dir=%s, "
+                             "error=%s). Continuing in stub mode; HTTP API works "
+                             "but Apple-backed endpoints will return 503.\n",
+                             libs_dir.c_str(), loader.last_error().c_str());
+                return;
+            }
             wrapper::apple::RuntimeConfig rcfg;
             rcfg.base_dir    = env_or("WRAPPER_BASE_DIR",    rcfg.base_dir);
             rcfg.device_info = env_or("WRAPPER_DEVICE_INFO", rcfg.device_info);
-            if (runtime.initialize(loader, rcfg)) {
-                // Session restore is deferred to a background thread below so
-                // the Apple-lib init and IPC read loop are not gated on it.
-            } else {
+            if (!runtime.initialize(loader, rcfg)) {
                 std::fprintf(stderr,
                              "wrapper-v2: Apple runtime init failed after dlopen "
                              "succeeded; the loaded libs may be from an unexpected "
                              "Apple Music native library version. Continuing in "
                              "stub mode.\n");
+                return;
             }
-        } else {
-            std::fprintf(stderr,
-                         "wrapper-v2: Apple lib load failed (libs_dir=%s, error=%s). "
-                         "Continuing in stub mode; HTTP API works but Apple-backed "
-                         "endpoints will return 503.\n",
-                         libs_dir.c_str(), loader.last_error().c_str());
-        }
-    } else {
-        std::fprintf(stderr,
-                     "wrapper-v2: WRAPPER_APPLE_INIT=0, skipping Apple lib init "
-                     "(stub mode: /health only; POST /login returns 503)\n");
-    }
-
-    maybe_auto_login_from_env(account, loader, runtime, info.apple_init_enabled);
-
-    // Restore an on-disk Apple session (if any) on a background thread.
-    // try_restore_cached_session() harvests tokens via unbounded Apple network
-    // calls (dev token + music token). If Apple is slow or unreachable that
-    // call can hang indefinitely; running it synchronously here would keep the
-    // worker from ever entering its IPC read loop and wedge every request.
-    // Running it off-thread lets the worker become responsive immediately: the
-    // first /me or /playback performs the same lazy restore anyway (and skips
-    // quickly if this restore is still in flight - see Account::restore_mu_).
-    // A hung restore only degrades auth to fast 401s, never to hangs.
-    if (info.apple_init_enabled && runtime.initialized()) {
-        if (env_bool("WRAPPER_RESTORE_SESSION", true)) {
-            if (account.state() == wrapper::apple::LoginState::LoggedOut) {
-                std::fprintf(stderr,
-                             "wrapper-v2: restoring cached Apple session in the "
-                             "background\n");
-                std::thread restore_thread([&account, &loader, &runtime]() {
-                    const bool restored =
-                        account.try_restore_cached_session(loader, runtime);
-                    if (restored) {
+            maybe_auto_login_from_env(account, loader, runtime, true);
+            if (env_bool("WRAPPER_RESTORE_SESSION", true)) {
+                if (account.state() == wrapper::apple::LoginState::LoggedOut) {
+                    // try_restore_cached_session() harvests tokens via unbounded
+                    // Apple network calls. A hung restore only degrades auth to
+                    // fast 401s here; handlers also run a try_to_lock-gated lazy
+                    // restore, so the IPC loop is never blocked on it.
+                    std::fprintf(stderr,
+                                 "wrapper-v2: restoring cached Apple session in "
+                                 "the background\n");
+                    if (account.try_restore_cached_session(loader, runtime)) {
                         std::fprintf(stderr,
                                      "wrapper-v2: session restored from Apple cache "
                                      "(GET /me without POST /login)\n");
                     }
-                });
-                restore_thread.detach();
+                } else {
+                    std::fprintf(stderr,
+                                 "wrapper-v2: auto-login in progress; skipping "
+                                 "cached session restore\n");
+                }
             } else {
                 std::fprintf(stderr,
-                             "wrapper-v2: auto-login in progress; skipping cached "
-                             "session restore\n");
+                             "wrapper-v2: WRAPPER_RESTORE_SESSION=0, skipping "
+                             "cached session probe\n");
             }
-        } else {
             std::fprintf(stderr,
-                         "wrapper-v2: WRAPPER_RESTORE_SESSION=0, skipping cached "
-                         "session probe\n");
-        }
+                         "wrapper-v2: Apple runtime init complete "
+                         "(initialized=%d playback_ready=%d)\n",
+                         runtime.initialized() ? 1 : 0,
+                         runtime.playback_ready() ? 1 : 0);
+        });
+        init_thread.detach();
+    } else {
+        std::fprintf(stderr,
+                     "wrapper-v2: WRAPPER_APPLE_INIT=0, skipping Apple lib init "
+                     "(stub mode: /health only; POST /login returns 503)\n");
     }
 
     return wrapper::run_ipc_worker(runtime, loader, account, info);

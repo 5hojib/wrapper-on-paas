@@ -308,8 +308,11 @@ Apple's native libraries make unbounded synchronous network calls (startup
 lease, token harvest, session restore) with no internal timeout. The
 supervisor treats the worker as a black box: it probes each spawn, bounds
 queueing, and — if a worker can never become ready — exits so the platform
-restarts the whole process. Session restore itself runs on a background thread
-in the worker, so a wedged Apple network call no longer blocks the IPC loop.
+restarts the whole process. The worker defers all Apple work (dlopen, runtime
+init including the lease request, env auto-login, session restore) to a
+background thread, so its IPC read loop starts immediately and a wedged Apple
+network call never blocks it; Apple-backed requests return a fast `503
+runtime_not_initialized` until init completes.
 - `WRAPPER_BASE_DIR` - filesystem dir Apple's libs use for the FPS
   key cache and `mpl_db`. The default matches upstream wrapper.
 - `WRAPPER_RESTORE_SESSION` - set to `0` to skip startup token harvest from
