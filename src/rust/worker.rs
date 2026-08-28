@@ -482,7 +482,7 @@ impl Worker {
             .lock()
             .ok()
             .and_then(|s| s.current.clone())
-            .map(|r| r.started.elapsed() >= self.request_timeout)
+            .map(|r| r.started.elapsed() >= self.busy_timeout)
             .unwrap_or(false);
         if !stuck {
             return;
