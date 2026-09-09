@@ -295,7 +295,7 @@ The daemon reads `WRAPPER_*` environment variables (forwarded via
   (Heroku H12 kills at 30s) so queued requests do not pile up.
 - `WRAPPER_WORKER_MAX_WAITERS` - maximum requests queued behind the current
   one; beyond this, new requests fail immediately with "worker busy".
-  Default is `16`.
+  Default is `32`.
 - `WRAPPER_WORKER_MAX_RESTARTS` - consecutive worker startup failures (spawn
   error or readiness-probe timeout) before the supervisor gives up. Default
   is `3`.

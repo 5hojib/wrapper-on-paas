@@ -577,7 +577,7 @@ fn worker_max_waiters() -> u32 {
         .ok()
         .and_then(|v| v.parse::<u32>().ok())
         .filter(|v| *v > 0)
-        .unwrap_or(16)
+        .unwrap_or(32)
 }
 
 // Consecutive failed worker startups (spawn error or readiness probe
