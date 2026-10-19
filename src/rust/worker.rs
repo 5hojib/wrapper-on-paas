@@ -504,29 +504,15 @@ impl Worker {
         if !stuck {
             return;
         }
-        // Clear the proc slot under lock so a concurrent request cannot reuse
-        // the dying worker while we kill it.
-        let old = {
-            let mut guard = match self.proc.lock() {
-                Ok(g) => g,
-                Err(_) => {
-                    std::process::exit(70);
-                }
-            };
-            guard.take()
-        };
-        let pid = if old.is_some() {
-            self.pid.swap(0, Ordering::Relaxed)
-        } else {
-            self.pid.swap(0, Ordering::Relaxed)
-        };
+        let pid = self.pid.swap(0, Ordering::Relaxed);
         if pid == 0 {
             eprintln!(
                 "wrapper: fatal: worker request is stale, but no worker pid is available; exiting for container restart"
             );
-            std::process::exit(70);
+            // Another thread may have already cleaned up the worker; do not
+            // take down the whole process in that case.
+            return;
         }
-        cleanup_worker(old, reason);
         self.record_restart(reason);
         thread::spawn(move || {
             eprintln!("wrapper: killing stuck worker pid={pid}: {reason}");
