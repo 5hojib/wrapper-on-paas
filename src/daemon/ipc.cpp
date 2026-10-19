@@ -197,8 +197,9 @@ bool authenticated_or_restored(apple::Account& account,
                                const apple::Runtime& rt) {
     if (account.state() == apple::LoginState::Authenticated) return true;
     if (!restore_session_enabled()) return false;
-    return account.try_restore_cached_session(loader, rt)
-        || account.state() == apple::LoginState::Authenticated;
+    // Never run Apple's unbounded network calls on the IPC thread.
+    account.trigger_restore_cached_session(loader, rt);
+    return false;
 }
 
 int http_status_for(apple::LoginState s) {

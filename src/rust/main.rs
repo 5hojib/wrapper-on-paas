@@ -1,3 +1,4 @@
+mod neon_state;
 mod protocol;
 mod worker;
 
@@ -6,6 +7,7 @@ use std::env;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::thread;
 use std::time::Duration;
 
@@ -17,7 +19,8 @@ const DEFAULT_HTTP_HOST: &str = "0.0.0.0";
 const DEFAULT_HTTP_PORT: u16 = 8080;
 const DEFAULT_DECRYPT_HOST: &str = "0.0.0.0";
 const DEFAULT_DECRYPT_PORT: u16 = 10020;
-const MAX_HTTP_BODY: usize = 512 * 1024 * 1024;
+const MAX_HTTP_BODY: usize = 64 * 1024 * 1024;
+const MAX_HTTP_CONNECTIONS: usize = 256;
 
 fn main() {
     if let Err(e) = run() {
@@ -46,8 +49,15 @@ fn run() -> io::Result<()> {
         .ok()
         .filter(|s| !s.is_empty());
 
+    // Restore Apple auth state from Neon (if configured) before starting
+    // the worker so session restore can see mpl_db on disk.
+    if let Err(e) = neon_state::restore_state() {
+        eprintln!("wrapper: neon restore failed: {e}");
+    }
+
     let worker = Arc::new(Worker::new("/system/bin/main", VERSION.to_string()));
     worker.ensure_started().map_err(worker_io_error)?;
+    neon_state::spawn_backup_loop(Arc::clone(&worker));
 
     if let Some(decrypt_port) = decrypt_port {
         let tcp_worker = Arc::clone(&worker);
@@ -85,15 +95,23 @@ fn worker_io_error(e: WorkerError) -> io::Error {
 fn run_http(addr: &str, worker: Arc<Worker>, api_key: Option<String>) -> io::Result<()> {
     let listener = TcpListener::bind(addr)?;
     eprintln!("wrapper: {VERSION} HTTP listening on {addr}");
+    let active = Arc::new(AtomicUsize::new(0));
     for conn in listener.incoming() {
         match conn {
             Ok(stream) => {
+                if active.load(AtomicOrdering::Relaxed) >= MAX_HTTP_CONNECTIONS {
+                    let _ = stream.shutdown(std::net::Shutdown::Both);
+                    continue;
+                }
+                active.fetch_add(1, AtomicOrdering::Relaxed);
                 let worker = Arc::clone(&worker);
                 let api_key = api_key.clone();
+                let active = Arc::clone(&active);
                 thread::spawn(move || {
                     if let Err(e) = handle_http_connection(stream, worker, api_key) {
                         eprintln!("wrapper: http connection error: {e}");
                     }
+                    active.fetch_sub(1, AtomicOrdering::Relaxed);
                 });
             }
             Err(e) => eprintln!("wrapper: http accept error: {e}"),
@@ -107,8 +125,8 @@ fn handle_http_connection(
     worker: Arc<Worker>,
     api_key: Option<String>,
 ) -> io::Result<()> {
-    stream.set_read_timeout(Some(Duration::from_secs(70)))?;
-    stream.set_write_timeout(Some(Duration::from_secs(70)))?;
+    stream.set_read_timeout(Some(Duration::from_secs(30)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(30)))?;
 
     let mut reader = BufReader::new(stream.try_clone()?);
     let mut head = Vec::new();
@@ -143,7 +161,7 @@ fn handle_http_connection(
             h.name.eq_ignore_ascii_case("authorization")
                 && h.value.len() == 7 + key.len()
                 && h.value.starts_with(b"Bearer ")
-                && h.value[7..].eq_ignore_ascii_case(key.as_bytes())
+                && &h.value[7..] == key.as_bytes()
         });
         if !authorized {
             write_json(

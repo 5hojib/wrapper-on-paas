@@ -103,8 +103,15 @@ struct DecryptThreadPool {
 
 DecryptThreadPool& get_thread_pool() {
     static DecryptThreadPool pool([] {
-        unsigned int n = std::thread::hardware_concurrency();
-        return (n == 0) ? 4u : n;
+        unsigned int n = 4;
+        if (const char* v = std::getenv("WRAPPER_DECRYPT_THREADS")) {
+            if (*v != '\\0') {
+                char* end = nullptr;
+                unsigned long parsed = std::strtoul(v, &end, 10);
+                if (end != v && parsed > 0 && parsed <= 64) n = (unsigned int)parsed;
+            }
+        }
+        return n;
     }());
     return pool;
 }
@@ -253,8 +260,8 @@ DecryptResult decrypt_samples(const Loader& loader,
 
         attempt.plaintexts.resize(chunks.size());
 
-        unsigned int hw_concurrency = std::thread::hardware_concurrency();
-        unsigned int num_threads = (hw_concurrency == 0) ? 4 : hw_concurrency;
+        unsigned int num_threads = get_thread_pool().workers.size();
+        if (num_threads == 0) num_threads = 4;
         if (num_threads > chunks.size()) {
             num_threads = static_cast<unsigned int>(chunks.size());
         }

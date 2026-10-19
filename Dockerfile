@@ -36,6 +36,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         ca-certificates \
         curl \
+        pkg-config \
+        libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
 ENV CARGO_HOME=/usr/local/cargo \
@@ -57,7 +59,10 @@ FROM ${BASE_IMAGE}
 
 # ca-certificates for SSL verification in rootless mode (the chroot mode uses
 # the bundle committed under rootfs/etc/ssl/certs inside the base image).
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tzdata && rm -rf /var/lib/apt/lists/* && \
+    mkdir -p /rootfs/system/usr/share && \
+    rm -rf /rootfs/system/usr/share/zoneinfo && \
+    cp -a /usr/share/zoneinfo /rootfs/system/usr/share/zoneinfo
 
 COPY --from=build /app/wrapper /app/wrapper
 
@@ -77,6 +82,7 @@ ENV ANDROID_DATA=/data \
     ANDROID_DNS_MODE=local \
     SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
     CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
+    TZ=UTC0 \
     PORT=8080
 
 # Heroku/Render inject the public port via $PORT; WRAPPER_PORT wins if set.

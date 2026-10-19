@@ -112,6 +112,9 @@ public:
     // (same pattern as upstream: init_ctx() without -L), harvest tokens
     // and become Authenticated. Returns false if no usable session.
     bool try_restore_cached_session(const Loader& loader, const Runtime& runtime);
+    // Non-blocking variant for IPC threads: kicks off a background restore
+    // (if not already running) and returns false immediately.
+    void trigger_restore_cached_session(const Loader& loader, const Runtime& runtime);
 
     // Block (up to `timeout`) until state transitions out of InProgress.
     // Returns the resulting state. Used by POST /login and POST /login/2fa
@@ -146,6 +149,7 @@ private:
     std::condition_variable cv_state_;       // notified on any state change
     std::condition_variable cv_2fa_;         // notified when 2FA code arrives or logout
     std::mutex restore_mu_;                  // serializes cached-session harvests
+    std::atomic<bool> restore_running_{false};
     std::atomic<LoginState> state_{LoginState::LoggedOut};
 
     // Inputs for the active login attempt.

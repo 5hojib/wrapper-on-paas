@@ -68,13 +68,10 @@ bool Account::start_login(const Loader& loader,
         return false;
     }
 
-    // Drain a previous worker thread, if any. join() outside the lock
-    // would risk re-entering Account from the worker; we take the
-    // hit of joining under the lock since the worker has already
-    // transitioned out of the busy states. This also allows POST /login
-    // to refresh an existing Authenticated snapshot after a stale restore.
+    // Never block the calling thread on a (possibly stuck) Apple worker.
+    // Detach instead so a hung login cannot deadlock POST /login.
     if (worker_.joinable()) {
-        worker_.join();
+        worker_.detach();
     }
 
     loader_   = &loader;
@@ -141,7 +138,7 @@ bool Account::try_restore_cached_session(const Loader& loader, const Runtime& ru
             return false;
         }
         if (worker_.joinable()) {
-            worker_.join();
+            worker_.detach();
         }
         loader_   = &loader;
         runtime_  = &runtime;
@@ -190,6 +187,19 @@ bool Account::try_restore_cached_session(const Loader& loader, const Runtime& ru
     return true;
 }
 
+void Account::trigger_restore_cached_session(const Loader& loader, const Runtime& runtime) {
+    if (restore_running_.load(std::memory_order_acquire)) return;
+    bool expected = false;
+    if (!restore_running_.compare_exchange_strong(expected, true,
+                                                 std::memory_order_acq_rel)) {
+        return;
+    }
+    std::thread([this, &loader, &runtime]() {
+        (void)try_restore_cached_session(loader, runtime);
+        restore_running_.store(false, std::memory_order_release);
+    }).detach();
+}
+
 void Account::logout() {
     {
         std::lock_guard<std::mutex> g(mu_);
@@ -198,7 +208,7 @@ void Account::logout() {
         cv_state_.notify_all();
     }
     if (worker_.joinable()) {
-        worker_.join();
+        worker_.detach();
     }
     std::lock_guard<std::mutex> g(mu_);
     state_.store(LoginState::LoggedOut, std::memory_order_release);

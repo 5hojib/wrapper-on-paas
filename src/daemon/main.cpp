@@ -89,11 +89,15 @@ std::string env_or(const char* name, std::string fallback) {
 bool env_bool(const char* name, bool fallback) {
     const char* v = std::getenv(name);
     if (v == nullptr || *v == '\0') return fallback;
+    if (std::strcmp(v, "1") == 0 || std::strcmp(v, "true") == 0
+        || std::strcmp(v, "yes") == 0 || std::strcmp(v, "on") == 0) {
+        return true;
+    }
     if (std::strcmp(v, "0") == 0 || std::strcmp(v, "false") == 0
-        || std::strcmp(v, "no") == 0) {
+        || std::strcmp(v, "no") == 0 || std::strcmp(v, "off") == 0) {
         return false;
     }
-    return true;
+    return fallback;
 }
 
 bool consume_argv(int argc, char** argv, ProgramMode* mode) {

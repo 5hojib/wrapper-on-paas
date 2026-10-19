@@ -295,7 +295,7 @@ impl Worker {
             .env("ANDROID_DNS_MODE", "local")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
+            .stderr(Stdio::piped())
             .spawn()
             .map_err(io_err)?;
         let stdin = match child.stdin.take() {
@@ -315,6 +315,23 @@ impl Worker {
                 return Err(WorkerError::Io("worker stdout unavailable".to_string()));
             }
         };
+        if let Some(stderr) = child.stderr.take() {
+            thread::spawn(move || {
+                use std::io::{BufRead, BufReader};
+                let reader = BufReader::new(stderr);
+                for line in reader.lines() {
+                    match line {
+                        Ok(l) => {
+                            if l.contains("__bionic_open_tzdata") {
+                                continue;
+                            }
+                            eprintln!("worker: {l}");
+                        }
+                        Err(_) => break,
+                    }
+                }
+            });
+        }
         if let Err(e) = set_nonblocking(&stdin).and_then(|_| set_nonblocking(&stdout)) {
             drop(stdin);
             drop(stdout);
@@ -487,13 +504,29 @@ impl Worker {
         if !stuck {
             return;
         }
-        let pid = self.pid.swap(0, Ordering::Relaxed);
+        // Clear the proc slot under lock so a concurrent request cannot reuse
+        // the dying worker while we kill it.
+        let old = {
+            let mut guard = match self.proc.lock() {
+                Ok(g) => g,
+                Err(_) => {
+                    std::process::exit(70);
+                }
+            };
+            guard.take()
+        };
+        let pid = if old.is_some() {
+            self.pid.swap(0, Ordering::Relaxed)
+        } else {
+            self.pid.swap(0, Ordering::Relaxed)
+        };
         if pid == 0 {
             eprintln!(
                 "wrapper: fatal: worker request is stale, but no worker pid is available; exiting for container restart"
             );
             std::process::exit(70);
         }
+        cleanup_worker(old, reason);
         self.record_restart(reason);
         thread::spawn(move || {
             eprintln!("wrapper: killing stuck worker pid={pid}: {reason}");
@@ -539,7 +572,7 @@ fn worker_timeout() -> Duration {
         .and_then(|v| v.parse::<u64>().ok())
         .filter(|v| *v > 0)
         .map(Duration::from_secs)
-        .unwrap_or_else(|| Duration::from_secs(60))
+        .unwrap_or_else(|| Duration::from_secs(25))
 }
 
 // How long to wait for a freshly-spawned worker to answer the OP_HEALTH
