@@ -397,6 +397,7 @@ Frame handle_playback(const Frame& req,
         pr = apple::fetch_playback_json(loader, rt, std::move(adam_id));
     }
     if (!pr.ok) {
+        std::fprintf(stderr, "playback: dispatch failed: %s\n", pr.error.c_str());
         return json_response(req, 502, json{
             {"error", "playback_dispatch_failed"},
             {"detail", pr.error},

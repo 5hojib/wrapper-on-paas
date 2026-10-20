@@ -501,6 +501,7 @@ impl Worker {
         guard: &mut MutexGuard<'_, Option<WorkerProcess>>,
         reason: &'static str,
     ) {
+        eprintln!("wrapper: abandoning worker: {reason}");
         let old = guard.take();
         self.pid.store(0, Ordering::Relaxed);
         cleanup_worker(old, reason);

@@ -294,6 +294,7 @@ bool Account::fetch_credentials_blocking(std::string* username,
 }
 
 void Account::finish_authenticated(Tokens t) {
+    std::fprintf(stderr, "auth: login succeeded (apple_id=%s)\n", t.apple_id.c_str());
     std::lock_guard<std::mutex> g(mu_);
     tokens_ = std::move(t);
     tokens_.logged_in_at = std::chrono::system_clock::now();
@@ -309,6 +310,7 @@ void Account::finish_authenticated(Tokens t) {
 }
 
 void Account::finish_failed(std::string message, int code) {
+    std::fprintf(stderr, "auth: login failed: %s (code %d)\n", message.c_str(), code);
     std::lock_guard<std::mutex> g(mu_);
     last_error_ = std::move(message);
     last_error_code_ = code;
