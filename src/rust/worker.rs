@@ -325,7 +325,21 @@ impl Worker {
                             if l.contains("__bionic_open_tzdata") {
                                 continue;
                             }
-                            eprintln!("worker: {l}");
+                            // Keep only important worker diagnostics to reduce log noise.
+                            let important = l.contains("error")
+                                || l.contains("fail")
+                                || l.contains("fatal")
+                                || l.contains("warn")
+                                || l.contains("probe")
+                                || l.contains("restart")
+                                || l.contains("neon")
+                                || l.contains("wrapper-v2")
+                                || l.contains("Apple runtime")
+                                || l.contains("playback lease")
+                                || l.contains("StoreError");
+                            if important {
+                                eprintln!("worker: {l}");
+                            }
                         }
                         Err(_) => break,
                     }
