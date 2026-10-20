@@ -256,8 +256,6 @@ DecryptResult decrypt_samples(const Loader& loader,
             (void)sv_ctx;
         }
 
-        std::fprintf(stderr, "decrypt: fp_sample_decrypt samples=%zu\n", chunks.size());
-
         attempt.plaintexts.resize(chunks.size());
 
         unsigned int num_threads = get_thread_pool().workers.size();

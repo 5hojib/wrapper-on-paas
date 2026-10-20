@@ -203,7 +203,6 @@ fn handle_http_connection(
     }
 
     let (path, query) = split_target(&target);
-    eprintln!("http: {method} {target}");
 
     match (method.as_str(), path.as_str()) {
         ("GET", "/health") => {
