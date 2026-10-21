@@ -11,6 +11,8 @@
 #include <thread>
 #include <vector>
 
+#include <errno.h>
+#include <poll.h>
 #include <unistd.h>
 
 #include <nlohmann/json.hpp>
@@ -83,8 +85,20 @@ bool read_full(int fd, void* buf, std::size_t len) {
     std::size_t got = 0;
     while (got < len) {
         ssize_t n = read(fd, p + got, len - got);
-        if (n <= 0) return false;
-        got += static_cast<std::size_t>(n);
+        if (n > 0) {
+            got += static_cast<std::size_t>(n);
+            continue;
+        }
+        if (n == 0) return false; // EOF
+        if (errno == EINTR) continue;
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            struct pollfd pfd{fd, POLLIN, 0};
+            int pr = poll(&pfd, 1, 1000);
+            if (pr > 0) continue;
+            if (pr == 0) continue; // timeout, retry
+            return false;
+        }
+        return false;
     }
     return true;
 }
@@ -94,8 +108,20 @@ bool write_full(int fd, const void* buf, std::size_t len) {
     std::size_t done = 0;
     while (done < len) {
         ssize_t n = write(fd, p + done, len - done);
-        if (n <= 0) return false;
-        done += static_cast<std::size_t>(n);
+        if (n > 0) {
+            done += static_cast<std::size_t>(n);
+            continue;
+        }
+        if (n == 0) return false;
+        if (errno == EINTR) continue;
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            struct pollfd pfd{fd, POLLOUT, 0};
+            int pr = poll(&pfd, 1, 1000);
+            if (pr > 0) continue;
+            if (pr == 0) continue;
+            return false;
+        }
+        return false;
     }
     return true;
 }
