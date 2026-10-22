@@ -7,7 +7,7 @@ use std::env;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
@@ -95,24 +95,38 @@ fn worker_io_error(e: WorkerError) -> io::Error {
 fn run_http(addr: &str, worker: Arc<Worker>, api_key: Option<String>) -> io::Result<()> {
     let listener = TcpListener::bind(addr)?;
     eprintln!("wrapper: {VERSION} HTTP listening on {addr}");
-    let active = Arc::new(AtomicUsize::new(0));
+
+    // Fixed-size worker pool: avoids spawning a thread per connection while
+    // still bounding concurrency. Backpressure comes from the bounded channel.
+    let (tx, rx) = mpsc::sync_channel::<TcpStream>(64);
+    let rx = Arc::new(std::sync::Mutex::new(rx));
+    for _ in 0..32 {
+        let rx = Arc::clone(&rx);
+        let worker = Arc::clone(&worker);
+        let api_key = api_key.clone();
+        thread::spawn(move || loop {
+            let stream = {
+                let guard = rx.lock().unwrap();
+                guard.recv()
+            };
+            match stream {
+                Ok(s) => {
+                    if let Err(e) = handle_http_connection(s, Arc::clone(&worker), api_key.clone())
+                    {
+                        eprintln!("wrapper: http connection error: {e}");
+                    }
+                }
+                Err(_) => break,
+            }
+        });
+    }
+
     for conn in listener.incoming() {
         match conn {
             Ok(stream) => {
-                if active.load(AtomicOrdering::Relaxed) >= MAX_HTTP_CONNECTIONS {
-                    let _ = stream.shutdown(std::net::Shutdown::Both);
-                    continue;
+                if tx.send(stream).is_err() {
+                    break;
                 }
-                active.fetch_add(1, AtomicOrdering::Relaxed);
-                let worker = Arc::clone(&worker);
-                let api_key = api_key.clone();
-                let active = Arc::clone(&active);
-                thread::spawn(move || {
-                    if let Err(e) = handle_http_connection(stream, worker, api_key) {
-                        eprintln!("wrapper: http connection error: {e}");
-                    }
-                    active.fetch_sub(1, AtomicOrdering::Relaxed);
-                });
             }
             Err(e) => eprintln!("wrapper: http accept error: {e}"),
         }
