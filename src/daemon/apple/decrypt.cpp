@@ -46,7 +46,7 @@ std::deque<std::string> g_kd_cache_order;
 // its string key; the kd pointers themselves are owned by Apple's FootHill
 // session, so evicting an entry just forces a getPersistentKey re-derivation
 // on the next request for that track. We do NOT free the kd pointer.
-constexpr std::size_t kKdCacheMaxEntries = 512;
+constexpr std::size_t kKdCacheMaxEntries = 128;
 
 // Persistent thread pool for sample decryption. Avoids spawning/joining
 // threads on every /decrypt call. Sized once at first use.
