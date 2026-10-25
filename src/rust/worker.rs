@@ -361,43 +361,30 @@ impl Worker {
     // up to max_startup_failures times, then the supervisor exits so the PaaS
     // platform restarts the dyno cleanly.
     fn spawn_ready(&self) -> Result<WorkerProcess, WorkerError> {
-        let attempts = self.max_startup_failures.max(1);
-        for attempt in 1..=attempts {
-            let mut proc = match self.spawn() {
-                Ok(p) => p,
-                Err(e) => {
-                    eprintln!(
-                        "wrapper: worker spawn failed (attempt {attempt}/{attempts}): {e}"
-                    );
-                    self.note_startup_failure();
-                    if attempt < attempts {
-                        thread::sleep(Duration::from_secs(1));
-                    }
-                    continue;
-                }
-            };
-            match self.probe_ready(&mut proc) {
-                Ok(()) => {
-                    eprintln!("wrapper: ipc worker ready (pid={})", proc.child.id());
-                    self.startup_failures.store(0, Ordering::Relaxed);
-                    return Ok(proc);
-                }
-                Err(e) => {
-                    eprintln!(
-                        "wrapper: worker startup probe failed (attempt {attempt}/{attempts}): {e}"
-                    );
-                    self.pid.store(0, Ordering::Relaxed);
-                    cleanup_worker(Some(proc), "startup probe failed");
-                    self.note_startup_failure();
-                    if attempt < attempts {
-                        thread::sleep(Duration::from_secs(1));
-                    }
-                }
+        // Fail fast: any worker spawn/probe failure means the dyno is in a bad
+        // state (usually memory pressure or a wedged Apple init). Retry loops
+        // only prolong the outage; exit immediately so the platform restarts
+        // the whole process with a clean memory space.
+        let mut proc = match self.spawn() {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("wrapper: worker spawn failed: {e}");
+                std::process::exit(70);
+            }
+        };
+        match self.probe_ready(&mut proc) {
+            Ok(()) => {
+                eprintln!("wrapper: ipc worker ready (pid={})", proc.child.id());
+                self.startup_failures.store(0, Ordering::Relaxed);
+                Ok(proc)
+            }
+            Err(e) => {
+                eprintln!("wrapper: worker startup probe failed: {e}");
+                self.pid.store(0, Ordering::Relaxed);
+                cleanup_worker(Some(proc), "startup probe failed");
+                std::process::exit(70);
             }
         }
-        Err(WorkerError::Unavailable(format!(
-            "worker failed to become ready after {attempts} attempts"
-        )))
     }
 
     fn note_startup_failure(&self) {
