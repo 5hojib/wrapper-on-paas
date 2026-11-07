@@ -361,30 +361,42 @@ impl Worker {
     // up to max_startup_failures times, then the supervisor exits so the PaaS
     // platform restarts the dyno cleanly.
     fn spawn_ready(&self) -> Result<WorkerProcess, WorkerError> {
-        // Fail fast: any worker spawn/probe failure means the dyno is in a bad
-        // state (usually memory pressure or a wedged Apple init). Retry loops
-        // only prolong the outage; exit immediately so the platform restarts
-        // the whole process with a clean memory space.
-        let mut proc = match self.spawn() {
-            Ok(p) => p,
-            Err(e) => {
-                eprintln!("wrapper: worker spawn failed: {e}");
-                std::process::exit(70);
-            }
-        };
-        match self.probe_ready(&mut proc) {
-            Ok(()) => {
-                eprintln!("wrapper: ipc worker ready (pid={})", proc.child.id());
-                self.startup_failures.store(0, Ordering::Relaxed);
-                Ok(proc)
-            }
-            Err(e) => {
-                eprintln!("wrapper: worker startup probe failed: {e}");
-                self.pid.store(0, Ordering::Relaxed);
-                cleanup_worker(Some(proc), "startup probe failed");
-                std::process::exit(70);
+        // A failed spawn or probe usually means memory pressure or a wedged
+        // Apple init, and retrying rarely helps: by default the supervisor
+        // exits on the first failure so the platform restarts the dyno with a
+        // clean memory space. WRAPPER_WORKER_MAX_RESTARTS allows more tries,
+        // and WRAPPER_EXIT_ON_STARTUP_FAILURE=0 answers 503s instead of
+        // exiting once they run out.
+        let attempts = self.max_startup_failures.max(1);
+        let mut last = String::new();
+        for _ in 0..attempts {
+            let mut proc = match self.spawn() {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("wrapper: worker spawn failed: {e}");
+                    last = e.to_string();
+                    self.note_startup_failure();
+                    continue;
+                }
+            };
+            match self.probe_ready(&mut proc) {
+                Ok(()) => {
+                    eprintln!("wrapper: ipc worker ready (pid={})", proc.child.id());
+                    self.startup_failures.store(0, Ordering::Relaxed);
+                    return Ok(proc);
+                }
+                Err(e) => {
+                    eprintln!("wrapper: worker startup probe failed: {e}");
+                    last = e.to_string();
+                    self.pid.store(0, Ordering::Relaxed);
+                    cleanup_worker(Some(proc), "startup probe failed");
+                    self.note_startup_failure();
+                }
             }
         }
+        Err(WorkerError::Unavailable(format!(
+            "worker failed to become ready after {attempts} attempt(s): {last}"
+        )))
     }
 
     fn note_startup_failure(&self) {
@@ -592,21 +604,22 @@ fn worker_max_waiters() -> u32 {
         .unwrap_or(32)
 }
 
-// Consecutive failed worker startups (spawn error or readiness probe
-// timeout) before the supervisor gives up and exits so the PaaS platform
-// restarts the dyno cleanly. Set WRAPPER_EXIT_ON_STARTUP_FAILURE=0 to keep
-// serving 503s instead of exiting.
+// Worker startup attempts (spawn error or readiness probe timeout) before
+// the supervisor gives up: by default one, then it exits so the PaaS
+// platform restarts the dyno cleanly. Set WRAPPER_EXIT_ON_STARTUP_FAILURE=0
+// to keep serving 503s instead of exiting.
 fn worker_max_startup_failures() -> u32 {
     std::env::var("WRAPPER_WORKER_MAX_RESTARTS")
         .ok()
         .and_then(|v| v.parse::<u32>().ok())
         .filter(|v| *v > 0)
-        .unwrap_or(3)
+        .unwrap_or(1)
 }
 
+/// On unless set to 0/false/no: exiting lets the platform restart the dyno.
 fn worker_exit_on_startup_failure() -> bool {
     let v = std::env::var("WRAPPER_EXIT_ON_STARTUP_FAILURE").unwrap_or_default();
-    !matches!(v.trim(), "" | "0" | "false" | "no")
+    !matches!(v.trim(), "0" | "false" | "no")
 }
 
 // Rootless worker setup (replaces the former C launcher). The daemon at
@@ -623,7 +636,11 @@ fn setup_bionic_env() {
     ensure("ANDROID_DATA", "/data", false);
     ensure("ANDROID_ROOT", "/system", false);
     ensure("SSL_CERT_FILE", "/etc/ssl/certs/ca-certificates.crt", false);
-    ensure("CURL_CA_BUNDLE", "/etc/ssl/certs/ca-certificates.crt", false);
+    ensure(
+        "CURL_CA_BUNDLE",
+        "/etc/ssl/certs/ca-certificates.crt",
+        false,
+    );
 }
 
 fn ensure_apple_state_dirs() {
@@ -958,7 +975,10 @@ while True:
 
     fn base_env<'a>() -> Vec<(&'a str, String)> {
         vec![
-            ("WRAPPER_BASE_DIR", std::env::temp_dir().to_string_lossy().into_owned()),
+            (
+                "WRAPPER_BASE_DIR",
+                std::env::temp_dir().to_string_lossy().into_owned(),
+            ),
             ("WRAPPER_EXIT_ON_STARTUP_FAILURE", "0".into()),
         ]
     }

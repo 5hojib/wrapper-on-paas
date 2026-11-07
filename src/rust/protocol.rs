@@ -20,6 +20,7 @@ pub const DECRYPT_KIND_OK: u16 = 2;
 pub const DECRYPT_KIND_ERROR: u16 = 3;
 pub const DECRYPT_KIND_CLOSE: u16 = 9;
 
+#[cfg(test)]
 const HEADER_LEN: usize = 20;
 const DECRYPT_HEADER_LEN: usize = 16;
 
@@ -39,6 +40,8 @@ pub struct DecryptFrame {
     pub payload: Vec<u8>,
 }
 
+/// The plain frame codec; the supervisor uses the timed versions in worker.rs.
+#[cfg(test)]
 pub fn write_frame(mut w: impl Write, frame: &Frame) -> io::Result<()> {
     if frame.payload.len() > u32::MAX as usize {
         return Err(io::Error::new(
@@ -102,6 +105,7 @@ pub fn write_decrypt_frame(mut w: impl Write, frame: &DecryptFrame) -> io::Resul
     w.flush()
 }
 
+#[cfg(test)]
 pub fn read_frame(mut r: impl Read) -> io::Result<Frame> {
     let mut h = [0u8; HEADER_LEN];
     r.read_exact(&mut h)?;
@@ -132,7 +136,8 @@ pub fn read_frame(mut r: impl Read) -> io::Result<Frame> {
     })
 }
 
-pub fn decrypt_batch_payload(adam: &str, uri: &str, samples: &[Vec<u8>]) -> io::Result<Vec<u8>> {    if adam.len() > u16::MAX as usize
+pub fn decrypt_batch_payload(adam: &str, uri: &str, samples: &[Vec<u8>]) -> io::Result<Vec<u8>> {
+    if adam.len() > u16::MAX as usize
         || uri.len() > u16::MAX as usize
         || samples.len() > u32::MAX as usize
     {
@@ -258,11 +263,12 @@ pub fn parse_http_decrypt_batch(body: &[u8]) -> io::Result<(String, String, Vec<
             "empty decrypt batch field",
         ));
     }
-    let table_end = 12usize
-        .checked_add(sample_count.checked_mul(4).ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidData, "decrypt batch too large")
-        })?)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "decrypt batch too large"))?;
+    let table_end =
+        12usize
+            .checked_add(sample_count.checked_mul(4).ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "decrypt batch too large")
+            })?)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "decrypt batch too large"))?;
     let fixed_end = table_end
         .checked_add(adam_len)
         .and_then(|n| n.checked_add(uri_len))
@@ -407,6 +413,26 @@ mod tests {
         assert_eq!(
             parse_decrypt_samples_payload(&data).unwrap(),
             vec![b"abc".to_vec(), b"de".to_vec()]
+        );
+    }
+
+    /// The exact bytes hifitidebot's `applewrap::http_body` sends and its
+    /// `split_reply` reads (the same vectors are in its tests): a format
+    /// change on either side fails both test suites.
+    #[test]
+    fn hifitidebot_contract() {
+        let body = [
+            &[0, 0, 0, 3, 0, 0, 0, 7, 0, 0, 0, 2, 0, 0, 0, 2, 0, 0, 0, 3][..],
+            b"123skd://xabcde",
+        ]
+        .concat();
+        let (adam, uri, samples) = parse_http_decrypt_batch(&body).unwrap();
+        assert_eq!((adam.as_str(), uri.as_str()), ("123", "skd://x"));
+        assert_eq!(samples, vec![b"ab".to_vec(), b"cde".to_vec()]);
+        let reply = build_http_decrypt_samples_payload(&[b"a".to_vec(), b"bc".to_vec()]).unwrap();
+        assert_eq!(
+            reply,
+            [&[0, 0, 0, 2, 0, 0, 0, 1, 0, 0, 0, 2][..], b"abc"].concat()
         );
     }
 

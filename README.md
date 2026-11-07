@@ -296,13 +296,21 @@ The daemon reads `WRAPPER_*` environment variables (forwarded via
 - `WRAPPER_WORKER_MAX_WAITERS` - maximum requests queued behind the current
   one; beyond this, new requests fail immediately with "worker busy".
   Default is `32`.
-- `WRAPPER_WORKER_MAX_RESTARTS` - consecutive worker startup failures (spawn
-  error or readiness-probe timeout) before the supervisor gives up. Default
-  is `3`.
+- `WRAPPER_WORKER_MAX_RESTARTS` - worker startup attempts (spawn error or
+  readiness-probe timeout) before the supervisor gives up. Default is `1`:
+  a failed start usually means memory pressure or a wedged Apple init, so
+  the dyno is restarted at once rather than retried.
 - `WRAPPER_EXIT_ON_STARTUP_FAILURE` - set to `0` to keep serving `503`s
   instead of exiting the process after `WRAPPER_WORKER_MAX_RESTARTS`
   consecutive startup failures. Default is `1` (exit, so the PaaS platform
   restarts the dyno cleanly).
+
+- `WRAPPER_WORKER_BIN` - the worker executable. Default `/system/bin/main`;
+  point it at a stand-in to test the supervisor without Apple's libraries.
+
+The HTTP server keeps connections open (HTTP/1.1 keep-alive, 15 s idle
+limit), so a client decrypting a song batch after batch reuses one
+connection. It serves up to 64 connections at a time.
 
 Apple's native libraries make unbounded synchronous network calls (startup
 lease, token harvest, session restore) with no internal timeout. The

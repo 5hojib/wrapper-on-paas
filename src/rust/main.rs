@@ -6,8 +6,8 @@ use std::collections::HashMap;
 use std::env;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
-use std::sync::Arc;
 use std::sync::mpsc;
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -20,7 +20,11 @@ const DEFAULT_HTTP_PORT: u16 = 8080;
 const DEFAULT_DECRYPT_HOST: &str = "0.0.0.0";
 const DEFAULT_DECRYPT_PORT: u16 = 10020;
 const MAX_HTTP_BODY: usize = 64 * 1024 * 1024;
-const MAX_HTTP_CONNECTIONS: usize = 256;
+/// Request threads: each serves one connection at a time, and a keep-alive
+/// connection holds its thread until it goes idle.
+const HTTP_THREADS: usize = 64;
+/// How long a keep-alive connection may sit idle between requests.
+const HTTP_IDLE_TIMEOUT: Duration = Duration::from_secs(15);
 
 fn main() {
     if let Err(e) = run() {
@@ -45,9 +49,7 @@ fn run() -> io::Result<()> {
         .and_then(|v| v.trim().parse::<u16>().ok())
         .map(|v| if v == 0 { None } else { Some(v) })
         .unwrap_or(Some(DEFAULT_DECRYPT_PORT));
-    let api_key = env::var("WRAPPER_API_KEY")
-        .ok()
-        .filter(|s| !s.is_empty());
+    let api_key = env::var("WRAPPER_API_KEY").ok().filter(|s| !s.is_empty());
 
     // Restore Apple auth state from Neon (if configured) before starting
     // the worker so session restore can see mpl_db on disk.
@@ -55,7 +57,9 @@ fn run() -> io::Result<()> {
         eprintln!("wrapper: neon restore failed: {e}");
     }
 
-    let worker = Arc::new(Worker::new("/system/bin/main", VERSION.to_string()));
+    // WRAPPER_WORKER_BIN points at another worker (a fake one for tests).
+    let worker_bin = env_or("WRAPPER_WORKER_BIN", "/system/bin/main");
+    let worker = Arc::new(Worker::new(&worker_bin, VERSION.to_string()));
     worker.ensure_started().map_err(worker_io_error)?;
     neon_state::spawn_backup_loop(Arc::clone(&worker));
 
@@ -89,7 +93,7 @@ fn env_u16_opt(name: &str) -> Option<u16> {
 }
 
 fn worker_io_error(e: WorkerError) -> io::Error {
-    io::Error::new(io::ErrorKind::Other, e.to_string())
+    io::Error::other(e.to_string())
 }
 
 fn run_http(addr: &str, worker: Arc<Worker>, api_key: Option<String>) -> io::Result<()> {
@@ -100,7 +104,7 @@ fn run_http(addr: &str, worker: Arc<Worker>, api_key: Option<String>) -> io::Res
     // still bounding concurrency. Backpressure comes from the bounded channel.
     let (tx, rx) = mpsc::sync_channel::<TcpStream>(64);
     let rx = Arc::new(std::sync::Mutex::new(rx));
-    for _ in 0..32 {
+    for _ in 0..HTTP_THREADS {
         let rx = Arc::clone(&rx);
         let worker = Arc::clone(&worker);
         let api_key = api_key.clone();
@@ -134,29 +138,70 @@ fn run_http(addr: &str, worker: Arc<Worker>, api_key: Option<String>) -> io::Res
     Ok(())
 }
 
+thread_local! {
+    /// Whether the response being written keeps the connection open.
+    static KEEP_ALIVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// One client connection: HTTP/1.1 keep-alive, so a client sending batch
+/// after batch (the bot decrypting a song) reuses it instead of paying a new
+/// connection per request. An idle connection is let go after
+/// `HTTP_IDLE_TIMEOUT` so it doesn't hold a pool thread.
 fn handle_http_connection(
     mut stream: TcpStream,
     worker: Arc<Worker>,
     api_key: Option<String>,
 ) -> io::Result<()> {
-    stream.set_read_timeout(Some(Duration::from_secs(30)))?;
+    stream.set_nodelay(true)?;
     stream.set_write_timeout(Some(Duration::from_secs(30)))?;
+    let mut reader = BufReader::with_capacity(64 * 1024, stream.try_clone()?);
+    let mut first = true;
+    loop {
+        stream.set_read_timeout(Some(if first {
+            Duration::from_secs(30)
+        } else {
+            HTTP_IDLE_TIMEOUT
+        }))?;
+        first = false;
+        match serve_one(&mut stream, &mut reader, &worker, api_key.as_deref()) {
+            Ok(true) => {}
+            Ok(false) => return Ok(()),
+            // A keep-alive connection that went quiet: nothing to report.
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                ) =>
+            {
+                return Ok(())
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
 
-    let mut reader = BufReader::new(stream.try_clone()?);
+/// Reads and answers one request; whether the connection stays open.
+fn serve_one(
+    stream: &mut TcpStream,
+    reader: &mut BufReader<TcpStream>,
+    worker: &Arc<Worker>,
+    api_key: Option<&str>,
+) -> io::Result<bool> {
+    KEEP_ALIVE.with(|k| k.set(false));
     let mut head = Vec::new();
     loop {
         let mut line = Vec::new();
         let n = reader.read_until(b'\n', &mut line)?;
         if n == 0 {
-            return Ok(());
+            return Ok(false);
         }
         head.extend_from_slice(&line);
         if head.ends_with(b"\r\n\r\n") || head.ends_with(b"\n\n") {
             break;
         }
         if head.len() > 64 * 1024 {
-            write_json(&mut stream, 431, json!({"error":"headers_too_large"}))?;
-            return Ok(());
+            write_json(stream, 431, json!({"error":"headers_too_large"}))?;
+            return Ok(false);
         }
     }
 
@@ -166,9 +211,14 @@ fn handle_http_connection(
         .parse(&head)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
     if !parsed.is_complete() {
-        write_json(&mut stream, 400, json!({"error":"bad_request"}))?;
-        return Ok(());
+        write_json(stream, 400, json!({"error":"bad_request"}))?;
+        return Ok(false);
     }
+    // HTTP/1.1 keeps the connection unless the client says otherwise.
+    let keep = req.version == Some(1)
+        && !req.headers.iter().any(|h| {
+            h.name.eq_ignore_ascii_case("connection") && h.value.eq_ignore_ascii_case(b"close")
+        });
 
     if let Some(key) = api_key {
         let authorized = req.headers.iter().any(|h| {
@@ -179,11 +229,11 @@ fn handle_http_connection(
         });
         if !authorized {
             write_json(
-                &mut stream,
+                stream,
                 401,
                 json!({"error":"unauthorized","detail":"missing or invalid WRAPPER_API_KEY"}),
             )?;
-            return Ok(());
+            return Ok(false);
         }
     }
 
@@ -204,11 +254,11 @@ fn handle_http_connection(
     }
     if content_length > MAX_HTTP_BODY {
         write_json(
-            &mut stream,
+            stream,
             413,
             json!({"error":"payload_too_large","limit":MAX_HTTP_BODY}),
         )?;
-        return Ok(());
+        return Ok(false);
     }
 
     let mut body = vec![0u8; content_length];
@@ -217,6 +267,7 @@ fn handle_http_connection(
     }
 
     let (path, query) = split_target(&target);
+    KEEP_ALIVE.with(|k| k.set(keep));
 
     match (method.as_str(), path.as_str()) {
         ("GET", "/health") => {
@@ -234,7 +285,7 @@ fn handle_http_connection(
                 None
             };
             write_json(
-                &mut stream,
+                stream,
                 200,
                 json!({
                     "status": "ok",
@@ -245,40 +296,37 @@ fn handle_http_connection(
                 }),
             )?;
         }
-        ("GET", "/me") => proxy_json(
-            &mut stream,
-            worker.request_json(protocol::OP_ME, Value::Null),
-        )?,
+        ("GET", "/me") => proxy_json(stream, worker.request_json(protocol::OP_ME, Value::Null))?,
         ("POST", "/login") => {
             let v = match parse_json_body(&body) {
                 Ok(v) => v,
                 Err(e) => {
                     write_json(
-                        &mut stream,
+                        stream,
                         400,
                         json!({"error":"invalid_json","detail":e.to_string()}),
                     )?;
-                    return Ok(());
+                    return Ok(false);
                 }
             };
-            proxy_json(&mut stream, worker.request_json(protocol::OP_LOGIN, v))?;
+            proxy_json(stream, worker.request_json(protocol::OP_LOGIN, v))?;
         }
         ("POST", "/login/2fa") => {
             let v = match parse_json_body(&body) {
                 Ok(v) => v,
                 Err(e) => {
                     write_json(
-                        &mut stream,
+                        stream,
                         400,
                         json!({"error":"invalid_json","detail":e.to_string()}),
                     )?;
-                    return Ok(());
+                    return Ok(false);
                 }
             };
-            proxy_json(&mut stream, worker.request_json(protocol::OP_LOGIN_2FA, v))?;
+            proxy_json(stream, worker.request_json(protocol::OP_LOGIN_2FA, v))?;
         }
         ("DELETE", "/login") => proxy_json(
-            &mut stream,
+            stream,
             worker.request_json(protocol::OP_LOGOUT, Value::Null),
         )?,
         ("GET", "/playback") => {
@@ -289,7 +337,7 @@ fn handle_http_connection(
                 .cloned()
                 .unwrap_or_default();
             proxy_json(
-                &mut stream,
+                stream,
                 worker.request_json(protocol::OP_PLAYBACK, json!({"adam_id": adam_id})),
             )?;
         }
@@ -303,24 +351,24 @@ fn handle_http_connection(
                 Ok((adam, uri, samples)) => match worker.decrypt_batch(&adam, &uri, samples) {
                     Ok(plaintexts) => {
                         let payload = protocol::build_http_decrypt_samples_payload(&plaintexts)?;
-                        write_response(&mut stream, 200, "application/octet-stream", &payload)?;
+                        write_response(stream, 200, "application/octet-stream", &payload)?;
                     }
                     Err(e) => write_json(
-                        &mut stream,
+                        stream,
                         502,
                         json!({"error":"decrypt_failed","detail":e.to_string()}),
                     )?,
                 },
                 Err(e) => write_json(
-                    &mut stream,
+                    stream,
                     400,
                     json!({"error":"invalid_frame","detail":e.to_string()}),
                 )?,
             }
         }
-        _ => write_json(&mut stream, 404, json!({"error":"not_found"}))?,
+        _ => write_json(stream, 404, json!({"error":"not_found"}))?,
     }
-    Ok(())
+    Ok(keep)
 }
 
 fn split_target(target: &str) -> (String, String) {
@@ -417,10 +465,12 @@ fn write_response(
     };
     write!(
         stream,
-        "HTTP/1.1 {status} {reason}\r\ncontent-type: {content_type}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
-        body.len()
+        "HTTP/1.1 {status} {reason}\r\ncontent-type: {content_type}\r\ncontent-length: {}\r\nconnection: {}\r\n\r\n",
+        body.len(),
+        if KEEP_ALIVE.with(|k| k.get()) { "keep-alive" } else { "close" }
     )?;
-    stream.write_all(body)
+    stream.write_all(body)?;
+    stream.flush()
 }
 
 fn run_decrypt_tcp(addr: &str, worker: Arc<Worker>) -> io::Result<()> {
